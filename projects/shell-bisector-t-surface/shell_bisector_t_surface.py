@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Shell Bisector T-Surface Generator
 
@@ -10,7 +11,7 @@ API signatures verified against Rhino 8 Python console (help() calls):
 - rs.OffsetSurface(surface_id, distance, solid=True)
 - rs.AddLoftSrf(object_ids, start_surface=None, end_surface=None)
 - Curve.DivideByCount(count, create_end_point)
-- BrepFace.NormalAt(u, v) [ignores OrientationIsReversed — must check manually]
+- BrepFace.NormalAt(u, v) [ignores OrientationIsReversed - must check manually]
 - Intersection.BrepBrep(brep_a, brep_b, tolerance)
 - Brep.DuplicateNakedEdgeCurves(get_internal, get_boundary)
 """
@@ -98,14 +99,14 @@ def find_seam_curve(surf1_id, surf2_id):
                 dist += edge1.PointAtEnd.DistanceTo(edge2.PointAtEnd)
                 if dist < TOLERANCE * 2:
                     if DEBUG:
-                        rs.print("Found seam via naked edges, distance=%.3f" % dist)
+                        print("Found seam via naked edges, distance=%.3f" % dist)
                     return edge1
 
     # Fall back to BrepBrep intersection
     curves = Intersection.BrepBrep(brep1, brep2, TOLERANCE)
     if curves and len(curves) > 0:
         if DEBUG:
-            rs.print("Found seam via BrepBrep intersection, %d curves" % len(curves))
+            print("Found seam via BrepBrep intersection, %d curves" % len(curves))
         # Return the longest curve (most likely the actual seam)
         return max(curves, key=lambda c: c.GetLength())
 
@@ -164,7 +165,7 @@ def compute_bisector_surface(seam_curve, surf1_id, surf2_id):
             normals_b.append(normal2)
         except:
             if DEBUG:
-                rs.print("Warning: could not get normal at sample %d" % i)
+                print("Warning: could not get normal at sample %d" % i)
             return None
 
     # Compute bisecting direction at each sample
@@ -192,9 +193,9 @@ def compute_bisector_surface(seam_curve, surf1_id, surf2_id):
     reach_id = rs.AddCurve(reach_curve, layer=seam_layer)
 
     if DEBUG:
-        rs.print("Seam curve length: %.3f" % seam_curve.GetLength())
-        rs.print("Reach curve length: %.3f" % reach_curve.GetLength())
-        rs.print("Successful samples: %d / %d" % (len(reach_points), BISECTOR_SAMPLE_COUNT + 1))
+        print("Seam curve length: %.3f" % seam_curve.GetLength())
+        print("Reach curve length: %.3f" % reach_curve.GetLength())
+        print("Successful samples: %d / %d" % (len(reach_points), BISECTOR_SAMPLE_COUNT + 1))
 
     # Loft seam + reach curves
     bisector_layer = ensure_layer("ShellBisector::03_BisectorSurface")
@@ -237,14 +238,14 @@ def build_t_geometry(bisector_id):
         dot = perp_dir.X * tang_dir.X + perp_dir.Y * tang_dir.Y + perp_dir.Z * tang_dir.Z
         if abs(dot) > 0.1:
             if DEBUG:
-                rs.print("Warning: perpendicular and tangent not orthogonal, dot=%.3f" % dot)
+                print("Warning: perpendicular and tangent not orthogonal, dot=%.3f" % dot)
 
         width_dir = Vector3d.CrossProduct(perp_dir, tang_dir)
         width_dir.Unitize()
 
     except:
         if DEBUG:
-            rs.print("Could not extract local frame from bisector")
+            print("Could not extract local frame from bisector")
         return None, None
 
     # Build 4 long edges as explicit line pairs
@@ -308,7 +309,7 @@ def build_t_geometry(bisector_id):
     edges = [perp_edge_1, perp_edge_2, para_edge_1, para_edge_2]
 
     if DEBUG:
-        rs.print("T-geometry built. T-Brep: %s" % ("yes" if t_brep_id else "no"))
+        print("T-geometry built. T-Brep: %s" % ("yes" if t_brep_id else "no"))
 
     return t_brep_id, edges
 
@@ -334,7 +335,7 @@ def offset_bisector(bisector_id):
         rs.ObjectLayer(offset_in_id, offset_layer)
 
     if DEBUG:
-        rs.print("Bisector offset: outward=%s, inward=%s" % (
+        print("Bisector offset: outward=%s, inward=%s" % (
             "yes" if offset_out_id else "no",
             "yes" if offset_in_id else "no"
         ))
@@ -355,7 +356,7 @@ def intersect_surfaces(offset_out_id, offset_in_id, original_shell_id):
         original_faces = [original_shell_id]
 
     if DEBUG:
-        rs.print("Testing %d original faces" % len(original_faces))
+        print("Testing %d original faces" % len(original_faces))
 
     for offset_id, offset_name in [(offset_out_id, "outward"), (offset_in_id, "inward")]:
         if not offset_id:
@@ -381,7 +382,7 @@ def intersect_surfaces(offset_out_id, offset_in_id, original_shell_id):
 
         if not offset_curves:
             if DEBUG:
-                rs.print("Warning: no intersection curves for %s offset" % offset_name)
+                print("Warning: no intersection curves for %s offset" % offset_name)
 
         # Bake all curves
         for curve in offset_curves:
@@ -389,7 +390,7 @@ def intersect_surfaces(offset_out_id, offset_in_id, original_shell_id):
             all_curves.append(curve_id)
 
         if DEBUG:
-            rs.print("Intersection curves (%s offset): %d" % (offset_name, len(offset_curves)))
+            print("Intersection curves (%s offset): %d" % (offset_name, len(offset_curves)))
 
     return all_curves
 
@@ -416,7 +417,7 @@ def loft_surfaces(t_edges, intersection_curves):
 
     if len(all_curves) < 2:
         if DEBUG:
-            rs.print("Not enough curves for loft (%d)" % len(all_curves))
+            print("Not enough curves for loft (%d)" % len(all_curves))
         return None
 
     # Sort by projection onto seam tangent (simplified: use first curve as reference)
@@ -440,11 +441,11 @@ def loft_surfaces(t_edges, intersection_curves):
     if loft_id:
         rs.ObjectLayer(loft_id, loft_layer)
         if DEBUG:
-            rs.print("Final loft created, %d input curves" % len(all_curves))
+            print("Final loft created, %d input curves" % len(all_curves))
         return loft_id
 
     if DEBUG:
-        rs.print("Final loft failed")
+        print("Final loft failed")
     return None
 
 # ============================================================================
@@ -461,7 +462,7 @@ def main():
         # Get input shell
         shell_id = rs.GetObject("Select shell polysurface", rs.filter.polysurface)
         if not shell_id:
-            rs.print("No shell selected.")
+            print("No shell selected.")
             return
 
         rs.EnableRedraw(False)
@@ -472,15 +473,15 @@ def main():
 
         offset_id = rs.OffsetSurface(shell_id, OFFSET_DISTANCE, solid=False)
         if not offset_id:
-            rs.print("Failed to offset shell")
+            print("Failed to offset shell")
             return
 
         rs.ObjectLayer(offset_id, offset_layer)
         offset_faces = rs.ExplodePolysurfaces(offset_id)
 
         if DEBUG:
-            rs.print("=== Stage 1: Offset ===")
-            rs.print("Offset shell created with %d faces" % (len(offset_faces) if offset_faces else 1))
+            print("=== Stage 1: Offset ===")
+            print("Offset shell created with %d faces" % (len(offset_faces) if offset_faces else 1))
 
         if STOP_AFTER_STAGE == "offset":
             doc.EndUndoRecord()
@@ -489,24 +490,24 @@ def main():
 
         # Stage 2: Compute bisector surface
         if DEBUG:
-            rs.print("=== Stage 2: Bisector Surface ===")
+            print("=== Stage 2: Bisector Surface ===")
 
         if not offset_faces or len(offset_faces) < 2:
-            rs.print("Offset shell has fewer than 2 faces")
+            print("Offset shell has fewer than 2 faces")
             return
 
         surf1_id = offset_faces[BISECT_SURFACE_1_INDEX] if BISECT_SURFACE_1_INDEX < len(offset_faces) else None
         surf2_id = offset_faces[BISECT_SURFACE_2_INDEX] if BISECT_SURFACE_2_INDEX < len(offset_faces) else None
 
         if not surf1_id or not surf2_id:
-            rs.print("Invalid surface indices")
+            print("Invalid surface indices")
             return
 
         seam_curve = find_seam_curve(surf1_id, surf2_id)
         bisector_id = compute_bisector_surface(seam_curve, surf1_id, surf2_id)
 
         if not bisector_id:
-            rs.print("Failed to create bisector surface")
+            print("Failed to create bisector surface")
             return
 
         if STOP_AFTER_STAGE == "bisector":
@@ -516,7 +517,7 @@ def main():
 
         # Stage 3: Build T geometry
         if DEBUG:
-            rs.print("=== Stage 3: T Geometry ===")
+            print("=== Stage 3: T Geometry ===")
 
         t_brep_id, t_edges = build_t_geometry(bisector_id)
 
@@ -527,12 +528,12 @@ def main():
 
         # Stage 4: Offset bisector
         if DEBUG:
-            rs.print("=== Stage 4: Bisector Offset ===")
+            print("=== Stage 4: Bisector Offset ===")
 
         offset_out_id, offset_in_id = offset_bisector(bisector_id)
 
         if not offset_out_id or not offset_in_id:
-            rs.print("Failed to offset bisector")
+            print("Failed to offset bisector")
             return
 
         if STOP_AFTER_STAGE == "bisector_offset":
@@ -542,12 +543,12 @@ def main():
 
         # Stage 5: Intersect
         if DEBUG:
-            rs.print("=== Stage 5: Intersection ===")
+            print("=== Stage 5: Intersection ===")
 
         intersection_curves = intersect_surfaces(offset_out_id, offset_in_id, shell_id)
 
         if not intersection_curves:
-            rs.print("No intersection curves found (check BISECTOR_SURFACE_REACH)")
+            print("No intersection curves found (check BISECTOR_SURFACE_REACH)")
             return
 
         if STOP_AFTER_STAGE == "intersect":
@@ -557,12 +558,12 @@ def main():
 
         # Stage 6: Loft
         if DEBUG:
-            rs.print("=== Stage 6: Final Loft ===")
+            print("=== Stage 6: Final Loft ===")
 
         loft_id = loft_surfaces(t_edges, intersection_curves)
 
         if not loft_id:
-            rs.print("Final loft failed")
+            print("Final loft failed")
             return
 
         # Create group for real outputs
@@ -575,14 +576,14 @@ def main():
             rs.AddObjectToGroup(t_brep_id, group_name)
 
         if DEBUG:
-            rs.print("=== Complete ===")
-            rs.print("Outputs grouped in '%s'" % group_name)
+            print("=== Complete ===")
+            print("Outputs grouped in '%s'" % group_name)
 
         doc.EndUndoRecord()
         rs.EnableRedraw(True)
 
     except Exception as e:
-        rs.print("Error: %s" % str(e))
+        print("Error: %s" % str(e))
         import traceback
         traceback.print_exc()
         doc.EndUndoRecord()
