@@ -1,631 +1,555 @@
-# -*- coding: utf-8 -*-
-"""
-Shell Bisector T-Surface Generator
-
-Run via Rhino 8's ScriptEditor (type ScriptEditor, open this file, press F5) —
-this runs Python 3 (CPython). Do NOT run via the RunPythonScript command;
-that invokes the legacy IronPython 2 engine instead, which this script no
-longer targets.
-
-Takes a shell polysurface, offsets the two selected panels individually
-(not the whole shell - see Stage 1 comment for why), computes a bisector
-surface between them, builds a T-shaped junction, intersects against the
-original shell, and lofts connecting surfaces.
-
-API signatures live-verified against developer.rhino3d.com / mcneel/rhinoscriptsyntax
-source (2026-07-22, after RunPythonScript/first-run bugs surfaced three invented or
-wrong signatures - see the project's Lessons for the full story):
-- rs.OffsetSurface(surface_id, distance, tolerance=None, both_sides=False,
-  create_solid=False) - NOT `solid=`, that keyword doesn't exist
-- rs.AddLoftSrf(object_ids, start=None, end=None, loft_type=0,
-  simplify_method=0, value=0, closed=False) - only called positionally here
-- rs.AddCurve(points, degree=3) - points-only; does NOT accept an existing
-  Curve object, use Objects.AddCurve (see bake_curve() below) for that
-- rs.AddBrep - does not exist in rhinoscriptsyntax at all; use
-  Objects.AddBrep (see bake_brep() below)
-- Curve.DivideByCount(count, create_end_point)
-- BrepFace.NormalAt(u, v) [ignores OrientationIsReversed - must check manually]
-- Intersection.BrepBrep(brep_a, brep_b, tolerance)
-- Brep.DuplicateNakedEdgeCurves(get_internal, get_boundary)
-- rs.UnitAbsoluteTolerance(tolerance=None, in_model_units=True) - returns doc
-  tolerance directly in drawing units, no unit-system conversion needed
-- RhinoDoc.BeginUndoRecord(description) -> serial_number (uint), NOT
-  zero-arg; RhinoDoc.EndUndoRecord(serial_number) needs that same value
-  passed back in, also NOT zero-arg
-"""
-
+import math
+import System
 import rhinoscriptsyntax as rs
 import Rhino
-from Rhino.Geometry import *
-from Rhino.Geometry.Intersect import Intersection
+import Rhino.Geometry as rg
+import scriptcontext as sc
 
-# ============================================================================
-# PARAMETERS
-# ============================================================================
 
-OFFSET_DISTANCE = 2.0
-BISECT_SURFACE_1_INDEX = 0
-BISECT_SURFACE_2_INDEX = 1
-BISECTOR_DIRECTION = 1  # 1 outward, -1 inward
-BISECTOR_OFFSET_DISTANCE = 0.5
-T_ARM_PERPENDICULAR_OFFSET = 1.0
-T_ARM_PARALLEL_OFFSET = 0.75
-BISECTOR_START_POINT_PARAMETER = 0.5
+def debug_log(step_name, status, details=""):
+    """Prints diagnostic information to the Rhino Command Line."""
+    msg = "[SHELL BISECTOR] [{0}] {1}".format(step_name, status)
+    if details:
+        msg += " | {0}".format(details)
+    print(msg)
 
-# Defaults for gaps in original spec
-BISECTOR_SURFACE_REACH = OFFSET_DISTANCE * 1.5
-T_ARM_WIDTH = min(T_ARM_PERPENDICULAR_OFFSET, T_ARM_PARALLEL_OFFSET) * 0.2
 
-# Tuning knobs
-BISECTOR_SAMPLE_COUNT = 20
-DEBUG = True
-STOP_AFTER_STAGE = None  # "offset" | "bisector" | "t_geometry" | "bisector_offset" | "intersect" | "loft"
-
-TOLERANCE = rs.UnitAbsoluteTolerance()
-
-# ============================================================================
-# HELPERS
-# ============================================================================
-
-def ensure_layer(layer_path):
-    """Ensure a layer hierarchy exists, creating parents as needed."""
-    parts = layer_path.split("::")
-    current = ""
-    for part in parts:
-        if current:
-            current += "::" + part
-        else:
-            current = part
-        if not rs.IsLayer(current):
-            rs.AddLayer(current)
-    return current
-
-def bake_curve(curve, layer=None):
-    """
-    Add an in-memory Rhino.Geometry.Curve to the document.
-    rs.AddCurve only builds a control-point curve from a list of points -
-    it can't take an existing Curve object, which is what every caller
-    here has. Objects.AddCurve is the correct way to inject one directly.
-    """
-    guid = Rhino.RhinoDoc.ActiveDoc.Objects.AddCurve(curve)
-    if layer:
-        rs.ObjectLayer(guid, layer)
-    return guid
-
-def bake_brep(brep, layer=None):
-    """Add an in-memory Rhino.Geometry.Brep to the document (rs.AddBrep doesn't exist)."""
-    guid = Rhino.RhinoDoc.ActiveDoc.Objects.AddBrep(brep)
-    if layer:
-        rs.ObjectLayer(guid, layer)
-    return guid
-
-def get_surface_from_brep(brep_id):
-    """Extract the underlying Surface from a Brep object."""
-    obj = rs.coercebrep(brep_id)
-    if obj and obj.Surfaces.Count > 0:
-        return obj.Surfaces[0]
-    return None
-
-def get_brep_face(brep_id, face_index):
-    """Extract a specific BrepFace from a Brep."""
-    obj = rs.coercebrep(brep_id)
-    if obj and face_index < obj.Faces.Count:
-        return obj.Faces[face_index]
-    return None
-
-def find_seam_curve(surf1_id, surf2_id):
-    """
-    Find shared seam between two offset surfaces.
-    Try naked-edge match first; fall back to BrepBrep intersection.
-    Returns a Curve or None.
-    """
-    brep1 = rs.coercebrep(surf1_id)
-    brep2 = rs.coercebrep(surf2_id)
-
-    if not brep1 or not brep2:
+def extract_brep(obj_id):
+    """Converts a Rhino document object GUID into a standalone Brep geometry."""
+    if not obj_id:
         return None
 
-    # Try naked edges first
-    naked1 = brep1.DuplicateNakedEdgeCurves(True, True)
-    naked2 = brep2.DuplicateNakedEdgeCurves(True, True)
+    rhino_obj = sc.doc.Objects.FindId(obj_id)
+    if not rhino_obj:
+        return None
 
-    if naked1 and naked2:
-        for edge1 in naked1:
-            for edge2 in naked2:
-                # Check endpoint distance
-                dist = edge1.PointAtStart.DistanceTo(edge2.PointAtStart)
-                dist += edge1.PointAtEnd.DistanceTo(edge2.PointAtEnd)
-                if dist < TOLERANCE * 2:
-                    if DEBUG:
-                        print("Found seam via naked edges, distance=%.3f" % dist)
-                    return edge1
+    geom = rhino_obj.Geometry
+    if isinstance(geom, rg.Brep):
+        return geom.DuplicateBrep()
+    elif isinstance(geom, rg.Surface):
+        return geom.ToBrep()
+    return None
 
-    # Fall back to BrepBrep intersection
-    curves = Intersection.BrepBrep(brep1, brep2, TOLERANCE)
-    if curves and len(curves) > 0:
-        if DEBUG:
-            print("Found seam via BrepBrep intersection, %d curves" % len(curves))
-        # Return the longest curve (most likely the actual seam)
-        return max(curves, key=lambda c: c.GetLength())
+
+def get_surface_subobject(prompt):
+    """Prompts user to select a single Brep face (subobject) from a polysurface."""
+    rs.UnselectAllObjects()
+    sc.doc.Objects.UnselectAll()
+    sc.doc.Views.Redraw()
+
+    go = Rhino.Input.Custom.GetObject()
+    go.SetCommandPrompt(prompt)
+    go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface
+    go.SubObjectSelect = True
+    go.EnablePreSelect(False, True)
+
+    res = go.Get()
+    if res != Rhino.Input.GetResult.Object:
+        debug_log("Selection", "ABORTED", "No sub-object face selected")
+        return None, None
+
+    obj_ref = go.Object(0)
+    face = obj_ref.Face()
+    if face:
+        debug_log("Selection", "SUCCESS", "Extracted BrepFace subobject (Index: {0})".format(face.FaceIndex))
+        return face.DuplicateFace(False), face.FaceIndex
+
+    obj = obj_ref.Object()
+    if obj and isinstance(obj.Geometry, rg.Brep):
+        brep = obj.Geometry
+        if brep.Faces.Count > 0:
+            debug_log("Selection", "SUCCESS", "Fallback face 0 selected")
+            return brep.Faces[0].DuplicateFace(False), 0
+
+    debug_log("Selection", "FAILED", "Could not extract face geometry")
+    return None, None
+
+
+def get_corresponding_original_face(orig_brep, offset_sub_brep, face_idx):
+    """Finds the BrepFace on the original shell corresponding to face_idx or spatial proximity."""
+    if not orig_brep or not offset_sub_brep:
+        return None
+
+    # Primary check: Topological index matching
+    if face_idx is not None and 0 <= face_idx < orig_brep.Faces.Count:
+        cand_face = orig_brep.Faces[face_idx]
+        face_bb = offset_sub_brep.GetBoundingBox(True)
+        pt_center = face_bb.Center
+        ok, u, v = cand_face.ClosestPoint(pt_center)
+        if ok:
+            pt_on_cand = cand_face.PointAt(u, v)
+            if pt_center.DistanceTo(pt_on_cand) < 100.0:
+                debug_log("Face Mapping", "Matched by Index", "Face Index: {0}".format(face_idx))
+                return cand_face.DuplicateFace(False)
+
+    # Fallback: Spatial proximity matching across original faces
+    face_bb = offset_sub_brep.GetBoundingBox(True)
+    pt_center = face_bb.Center
+    best_face = None
+    min_d = float('inf')
+
+    for i in range(orig_brep.Faces.Count):
+        f = orig_brep.Faces[i]
+        ok, u, v = f.ClosestPoint(pt_center)
+        if ok:
+            d = pt_center.DistanceTo(f.PointAt(u, v))
+            if d < min_d:
+                min_d = d
+                best_face = f
+
+    if best_face:
+        debug_log("Face Mapping", "Matched by Distance", "Min Dist: {0:.3f}".format(min_d))
+        return best_face.DuplicateFace(False)
 
     return None
 
-def compute_bisector_surface(seam_curve, surf1_id, surf2_id):
-    """
-    Compute bisector surface between two offset surfaces.
-    Sample seam, average normals, project along bisecting direction, loft.
-    """
-    if not seam_curve:
-        return None
 
-    brep1 = rs.coercebrep(surf1_id)
-    brep2 = rs.coercebrep(surf2_id)
+def intersect_with_shell(offset_bisector_brep, target_orig_breps, tolerance):
+    """Intersects offset bisector surface ONLY with the corresponding target faces of the original shell."""
+    if not offset_bisector_brep or not target_orig_breps:
+        return []
 
-    if not brep1 or not brep2:
-        return None
-
-    # Extract first face from each brep
-    face1 = brep1.Faces[0] if brep1.Faces.Count > 0 else None
-    face2 = brep2.Faces[0] if brep2.Faces.Count > 0 else None
-
-    if not face1 or not face2:
-        return None
-
-    # Sample the seam curve
-    seam_length = seam_curve.GetLength()
-    sample_points = []
-    normals_a = []
-    normals_b = []
-
-    for i in range(BISECTOR_SAMPLE_COUNT + 1):
-        t = i / float(BISECTOR_SAMPLE_COUNT)
-        param = seam_curve.Domain.T0 + t * (seam_curve.Domain.T1 - seam_curve.Domain.T0)
-        sample_pt = seam_curve.PointAt(param)
-        sample_points.append(sample_pt)
-
-        # Get normals from each surface
-        try:
-            closest_pt1 = face1.ClosestPoint(sample_pt)
-            u1, v1 = closest_pt1.Item2, closest_pt1.Item3
-            normal1 = face1.NormalAt(u1, v1)
-
-            # Check and flip if orientation is reversed
-            if face1.OrientationIsReversed:
-                normal1.Reverse()
-            normals_a.append(normal1)
-
-            closest_pt2 = face2.ClosestPoint(sample_pt)
-            u2, v2 = closest_pt2.Item2, closest_pt2.Item3
-            normal2 = face2.NormalAt(u2, v2)
-
-            if face2.OrientationIsReversed:
-                normal2.Reverse()
-            normals_b.append(normal2)
-        except:
-            if DEBUG:
-                print("Warning: could not get normal at sample %d" % i)
-            return None
-
-    # Compute bisecting direction at each sample
-    reach_points = []
-    for i, sample_pt in enumerate(sample_points):
-        if i < len(normals_a) and i < len(normals_b):
-            bisect_vec = normals_a[i] + normals_b[i]
-            bisect_vec.Unitize()
-
-            if BISECTOR_DIRECTION == -1:
-                bisect_vec.Reverse()
-
-            reach_pt = sample_pt + (bisect_vec * BISECTOR_SURFACE_REACH)
-            reach_points.append(reach_pt)
-
-    if len(sample_points) < 2 or len(reach_points) < 2:
-        return None
-
-    # Create reach curve by interpolating reach points
-    reach_curve = Curve.CreateInterpolatedCurve(reach_points, 3)
-
-    # Bake seam and reach curves to debug layer
-    seam_layer = ensure_layer("ShellBisector::02_BisectorSeam")
-    seam_id = bake_curve(seam_curve, layer=seam_layer)
-    reach_id = bake_curve(reach_curve, layer=seam_layer)
-
-    if DEBUG:
-        print("Seam curve length: %.3f" % seam_curve.GetLength())
-        print("Reach curve length: %.3f" % reach_curve.GetLength())
-        print("Successful samples: %d / %d" % (len(reach_points), BISECTOR_SAMPLE_COUNT + 1))
-
-    # Loft seam + reach curves
-    bisector_layer = ensure_layer("ShellBisector::03_BisectorSurface")
-    bisector_ids = [seam_id, reach_id]
-    loft_srf_id = rs.AddLoftSrf(bisector_ids)
-
-    if loft_srf_id:
-        rs.ObjectLayer(loft_srf_id, bisector_layer)
-        return loft_srf_id
-
-    return None
-
-def build_t_geometry(bisector_id):
-    """
-    Build T-shaped geometry from bisector surface.
-    Construct 4 long edges directly via local frame at start point.
-    """
-    if not bisector_id:
-        return None, None
-
-    # Get bisector surface
-    bisector_srf = get_surface_from_brep(bisector_id)
-    if not bisector_srf:
-        return None, None
-
-    # Get local frame at start point
-    try:
-        u_param = bisector_srf.Domain.U.T0 + BISECTOR_START_POINT_PARAMETER * (bisector_srf.Domain.U.T1 - bisector_srf.Domain.U.T0)
-        v_param = bisector_srf.Domain.V.T0 + 0.5 * (bisector_srf.Domain.V.T1 - bisector_srf.Domain.V.T0)
-
-        frame_pt = bisector_srf.PointAt(u_param, v_param)
-        perp_dir = bisector_srf.NormalAt(u_param, v_param)
-
-        # Get seam tangent direction (along U)
-        deriv = bisector_srf.Evaluate(u_param, v_param, 1, 1)
-        tang_dir = deriv[1]
-        tang_dir.Unitize()
-
-        # Re-orthogonalize if needed
-        dot = perp_dir.X * tang_dir.X + perp_dir.Y * tang_dir.Y + perp_dir.Z * tang_dir.Z
-        if abs(dot) > 0.1:
-            if DEBUG:
-                print("Warning: perpendicular and tangent not orthogonal, dot=%.3f" % dot)
-
-        width_dir = Vector3d.CrossProduct(perp_dir, tang_dir)
-        width_dir.Unitize()
-
-    except:
-        if DEBUG:
-            print("Could not extract local frame from bisector")
-        return None, None
-
-    # Build 4 long edges as explicit line pairs
-    half_width = T_ARM_WIDTH / 2.0
-
-    # Perpendicular arm (extends along perp_dir)
-    perp_start_1 = frame_pt + (width_dir * half_width)
-    perp_end_1 = perp_start_1 + (perp_dir * T_ARM_PERPENDICULAR_OFFSET)
-    perp_start_2 = frame_pt - (width_dir * half_width)
-    perp_end_2 = perp_start_2 + (perp_dir * T_ARM_PERPENDICULAR_OFFSET)
-
-    perp_edge_1 = Line(perp_start_1, perp_end_1).ToNurbsCurve()
-    perp_edge_2 = Line(perp_start_2, perp_end_2).ToNurbsCurve()
-
-    # Parallel arm (extends along tang_dir)
-    para_start_1 = frame_pt + (width_dir * half_width)
-    para_end_1 = para_start_1 + (tang_dir * T_ARM_PARALLEL_OFFSET)
-    para_start_2 = frame_pt - (width_dir * half_width)
-    para_end_2 = para_start_2 + (tang_dir * T_ARM_PARALLEL_OFFSET)
-
-    para_edge_1 = Line(para_start_1, para_end_1).ToNurbsCurve()
-    para_edge_2 = Line(para_start_2, para_end_2).ToNurbsCurve()
-
-    # Loft each pair into a strip
-    t_layer = ensure_layer("ShellBisector::04_TGeometry")
-
-    # Add edges as curve IDs for lofting
-    perp_edge_1_id = bake_curve(perp_edge_1, layer=t_layer)
-    perp_edge_2_id = bake_curve(perp_edge_2, layer=t_layer)
-    para_edge_1_id = bake_curve(para_edge_1, layer=t_layer)
-    para_edge_2_id = bake_curve(para_edge_2, layer=t_layer)
-
-    # Loft perpendicular arm
-    perp_strip_id = rs.AddLoftSrf([perp_edge_1_id, perp_edge_2_id])
-    if perp_strip_id:
-        rs.ObjectLayer(perp_strip_id, t_layer)
-
-    # Loft parallel arm
-    para_strip_id = rs.AddLoftSrf([para_edge_1_id, para_edge_2_id])
-    if para_strip_id:
-        rs.ObjectLayer(para_strip_id, t_layer)
-
-    # Try to join into one T-Brep (non-fatal if join doesn't fully merge)
-    if perp_strip_id and para_strip_id:
-        try:
-            perp_brep = rs.coercebrep(perp_strip_id)
-            para_brep = rs.coercebrep(para_strip_id)
-            joined = Brep.JoinBreps([perp_brep, para_brep], TOLERANCE)
-            if joined and len(joined) > 0:
-                rs.DeleteObject(perp_strip_id)
-                rs.DeleteObject(para_strip_id)
-                t_brep_id = bake_brep(joined[0], layer=t_layer)
-            else:
-                t_brep_id = None
-        except:
-            t_brep_id = None
-    else:
-        t_brep_id = None
-
-    # Return T-Brep and the 4 long edges for later use
-    edges = [perp_edge_1, perp_edge_2, para_edge_1, para_edge_2]
-
-    if DEBUG:
-        print("T-geometry built. T-Brep: %s" % ("yes" if t_brep_id else "no"))
-
-    return t_brep_id, edges
-
-def extract_t_edges(edges):
-    """Extract/return the 4 long edges (already constructed)."""
-    return edges if edges and len(edges) == 4 else []
-
-def offset_bisector(bisector_id):
-    """Offset bisector surface both directions (thin sandwich)."""
-    if not bisector_id:
-        return None, None
-
-    offset_layer = ensure_layer("ShellBisector::05_BisectorOffsets")
-
-    # Offset outward
-    offset_out_id = rs.OffsetSurface(bisector_id, BISECTOR_OFFSET_DISTANCE, create_solid=False)
-    if offset_out_id:
-        rs.ObjectLayer(offset_out_id, offset_layer)
-
-    # Offset inward
-    offset_in_id = rs.OffsetSurface(bisector_id, -BISECTOR_OFFSET_DISTANCE, create_solid=False)
-    if offset_in_id:
-        rs.ObjectLayer(offset_in_id, offset_layer)
-
-    if DEBUG:
-        print("Bisector offset: outward=%s, inward=%s" % (
-            "yes" if offset_out_id else "no",
-            "yes" if offset_in_id else "no"
-        ))
-
-    return offset_out_id, offset_in_id
-
-def intersect_surfaces(offset_out_id, offset_in_id, original_shell_id):
-    """
-    Intersect bisector offsets against original shell (all surfaces).
-    Return collected intersection curves.
-    """
-    intersect_layer = ensure_layer("ShellBisector::06_IntersectionCurves")
     all_curves = []
-
-    # Explode original shell
-    original_faces = rs.ExplodePolysurfaces(original_shell_id)
-    if not original_faces:
-        original_faces = [original_shell_id]
-
-    if DEBUG:
-        print("Testing %d original faces" % len(original_faces))
-
-    for offset_id, offset_name in [(offset_out_id, "outward"), (offset_in_id, "inward")]:
-        if not offset_id:
+    for orig_sub in target_orig_breps:
+        if not orig_sub:
             continue
+        res = rg.Intersect.Intersection.BrepBrep(offset_bisector_brep, orig_sub, tolerance)
+        if isinstance(res, tuple) and len(res) >= 2:
+            ok, curves = res[0], res[1]
+            if ok and curves:
+                crv_list = [c for c in curves if c is not None]
+                all_curves.extend(crv_list)
 
-        offset_brep = rs.coercebrep(offset_id)
-        if not offset_brep:
-            continue
-
-        offset_curves = []
-
-        for face_id in original_faces:
-            face_brep = rs.coercebrep(face_id)
-            if not face_brep:
-                continue
-
-            try:
-                curves = Intersection.BrepBrep(offset_brep, face_brep, TOLERANCE)
-                if curves:
-                    offset_curves.extend(curves)
-            except:
-                pass
-
-        if not offset_curves:
-            if DEBUG:
-                print("Warning: no intersection curves for %s offset" % offset_name)
-
-        # Bake all curves
-        for curve in offset_curves:
-            curve_id = bake_curve(curve, layer=intersect_layer)
-            all_curves.append(curve_id)
-
-        if DEBUG:
-            print("Intersection curves (%s offset): %d" % (offset_name, len(offset_curves)))
-
+    debug_log("Intersection", "Result", "Found {0} intersection curves on target original faces".format(len(all_curves)))
     return all_curves
 
-def loft_surfaces(t_edges, intersection_curves):
-    """
-    Loft connecting surfaces between intersection curves and T long-edges.
-    Sort by projection, anti-twist, final loft.
-    """
-    if not t_edges or not intersection_curves:
+
+def prompt_parameters():
+    """Prompts user for shell offset distance, direction, bisector side extension, and fin parameters."""
+    print("\n--- PARAMETER SETUP ---")
+
+    dist = rs.GetReal("Enter Shell Offset Distance", 2.0, 0.001, 1000.0)
+    if dist is None:
         return None
 
-    loft_layer = ensure_layer("ShellBisector::07_FinalLoft")
-
-    # Combine edges and curves
-    all_curves = []
-
-    # Add T edges
-    for edge in t_edges:
-        edge_id = bake_curve(edge)
-        all_curves.append(edge_id)
-
-    # Add intersection curves
-    all_curves.extend(intersection_curves)
-
-    if len(all_curves) < 2:
-        if DEBUG:
-            print("Not enough curves for loft (%d)" % len(all_curves))
+    dir_opt = rs.GetBoolean("Select Shell Offset Direction", [("Direction", "Inward", "Outward")], [True])
+    if dir_opt is None:
         return None
 
-    # Sort by projection onto seam tangent (simplified: use first curve as reference)
-    # This is a placeholder; full implementation would project midpoints
+    is_outward = dir_opt[0]
+    signed_dist = dist if is_outward else -dist
 
-    # Anti-twist: reverse curves if start is closer to previous end
-    for i in range(1, len(all_curves)):
-        prev_curve = rs.coercecurve(all_curves[i - 1])
-        curr_curve = rs.coercecurve(all_curves[i])
+    bisect_len = rs.GetReal("Enter Bisector Surface Extension Length", 5.0, 0.01, 1000.0)
+    if bisect_len is None:
+        return None
 
-        if prev_curve and curr_curve:
-            dist_start_to_start = prev_curve.PointAtStart.DistanceTo(curr_curve.PointAtStart)
-            dist_start_to_end = prev_curve.PointAtStart.DistanceTo(curr_curve.PointAtEnd)
+    side_ext = rs.GetReal("Enter Bisector Side Extension Distance (at open edges)", 12.0, 0.0, 1000.0)
+    if side_ext is None:
+        return None
 
-            if dist_start_to_end < dist_start_to_start:
-                rs.ReverseCurve(all_curves[i])
+    fin_dist1 = rs.GetReal("Enter T-Fin Side 1 Offset Distance", 1.0, 0.01, 1000.0)
+    if fin_dist1 is None:
+        return None
 
-    # Final loft
-    loft_id = rs.AddLoftSrf(all_curves)
+    fin_dist2 = rs.GetReal("Enter T-Fin Side 2 Offset Distance", 1.0, 0.01, 1000.0)
+    if fin_dist2 is None:
+        return None
 
-    if loft_id:
-        rs.ObjectLayer(loft_id, loft_layer)
-        if DEBUG:
-            print("Final loft created, %d input curves" % len(all_curves))
-        return loft_id
+    off_pos = rs.GetReal("Enter Positive Bisector Offset Distance", 0.5, 0.001, 1000.0)
+    if off_pos is None:
+        return None
 
-    if DEBUG:
-        print("Final loft failed")
+    off_neg = rs.GetReal("Enter Negative Bisector Offset Distance", 0.8, 0.001, 1000.0)
+    if off_neg is None:
+        return None
+
+    params = {
+        "shell_offset": signed_dist,
+        "bisector_len": bisect_len,
+        "side_ext": side_ext,
+        "fin_dist1": fin_dist1,
+        "fin_dist2": fin_dist2,
+        "off_pos": off_pos,
+        "off_neg": off_neg
+    }
+
+    return params
+
+
+def offset_shell(original_brep, distance, tolerance):
+    """Offsets original shell polysurface handling PythonNet tuple returns in Rhino 8/9."""
+    if not original_brep or not original_brep.IsValid:
+        debug_log("Offset Shell", "FAILED", "Invalid input brep")
+        return None
+
+    offset_res = rg.Brep.CreateOffsetBrep(original_brep, distance, False, True, tolerance)
+    if offset_res:
+        if isinstance(offset_res, tuple) and len(offset_res) > 0:
+            brep_array = offset_res[0]
+        else:
+            brep_array = offset_res
+
+        if brep_array:
+            brep_list = [b for b in brep_array if b is not None]
+            if len(brep_list) > 0:
+                res = brep_list[0]
+                debug_log("Offset Shell", "SUCCESS", "Faces count: {0}".format(res.Faces.Count))
+                return res
+
+    # Fallback face-by-face offset
+    face_offsets = []
+    for i in range(original_brep.Faces.Count):
+        f = original_brep.Faces[i]
+        srf = f.DuplicateSurface()
+        off = srf.Offset(distance, tolerance)
+        if off:
+            face_offsets.append(off.ToBrep())
+
+    if face_offsets:
+        joined = rg.Brep.JoinBreps(face_offsets, tolerance)
+        if joined:
+            if isinstance(joined, tuple) and len(joined) > 0:
+                joined_array = joined[0]
+            else:
+                joined_array = joined
+            if joined_array:
+                joined_list = [b for b in joined_array if b is not None]
+                if len(joined_list) > 0:
+                    debug_log("Offset Shell", "SUCCESS (Fallback)", "Joined faces: {0}".format(len(face_offsets)))
+                    return joined_list[0]
+
+    debug_log("Offset Shell", "FAILED", "Offset calculation returned empty result")
     return None
 
-# ============================================================================
-# MAIN
-# ============================================================================
+
+def compute_bisector_surface(srf1_brep, srf2_brep, length, side_ext, samples, tolerance):
+    """Computes a bisector surface along the shared intersection edge, extending side edges by side_ext."""
+    if not srf1_brep or not srf2_brep:
+        debug_log("Bisector", "FAILED", "Null input face geometry")
+        return None, None
+
+    if srf1_brep.Faces.Count == 0 or srf2_brep.Faces.Count == 0:
+        debug_log("Bisector", "FAILED", "Empty brep faces")
+        return None, None
+
+    face1 = srf1_brep.Faces[0]
+    face2 = srf2_brep.Faces[0]
+
+    # Intersect two faces to extract joint edge
+    res = rg.Intersect.Intersection.BrepBrep(srf1_brep, srf2_brep, tolerance)
+    joint_curve = None
+    if isinstance(res, tuple) and len(res) >= 2:
+        ok, int_curves = res[0], res[1]
+        if ok and int_curves:
+            crv_list = [c for c in int_curves if c is not None]
+            if len(crv_list) > 0:
+                joint_curve = max(crv_list, key=lambda c: c.GetLength())
+
+    if not joint_curve or joint_curve.GetLength() <= tolerance:
+        debug_log("Bisector", "FAILED", "No shared intersection edge found between selected faces")
+        return None, None
+
+    debug_log("Bisector", "Joint Edge Found", "Length: {0:.3f}".format(joint_curve.GetLength()))
+
+    t_vals = joint_curve.DivideByCount(samples, True)
+    if not t_vals:
+        return None, None
+
+    pts_start = []
+    pts_end = []
+
+    for t in t_vals:
+        pt = joint_curve.PointAt(t)
+
+        ok1, u1, v1 = face1.ClosestPoint(pt)
+        n1 = face1.NormalAt(u1, v1) if ok1 else rg.Vector3d.ZAxis
+
+        ok2, u2, v2 = face2.ClosestPoint(pt)
+        n2 = face2.NormalAt(u2, v2) if ok2 else rg.Vector3d.ZAxis
+
+        n1.Unitize()
+        n2.Unitize()
+
+        bisect_vec = n1 + n2
+        if bisect_vec.Length < 1e-6:
+            tangent = joint_curve.TangentAt(t)
+            bisect_vec = rg.Vector3d.CrossProduct(tangent, n1)
+
+        bisect_vec.Unitize()
+        pt_end = pt + (bisect_vec * length)
+
+        pts_start.append(pt)
+        pts_end.append(pt_end)
+
+    crv_start = rg.NurbsCurve.CreateInterpolatedCurve(pts_start, 3)
+    crv_end = rg.NurbsCurve.CreateInterpolatedCurve(pts_end, 3)
+
+    if side_ext > 1e-6 and crv_start and crv_end:
+        ext_start = crv_start.Extend(rg.CurveEnd.Both, side_ext, rg.CurveExtensionStyle.Line)
+        ext_end = crv_end.Extend(rg.CurveEnd.Both, side_ext, rg.CurveExtensionStyle.Line)
+        if ext_start and ext_end:
+            crv_start = ext_start
+            crv_end = ext_end
+            debug_log("Bisector", "Side Extension", "Extended edges by {0:.2f} units".format(side_ext))
+
+    if crv_start and crv_end:
+        lofts = rg.Brep.CreateFromLoft([crv_start, crv_end], rg.Point3d.Unset, rg.Point3d.Unset, rg.LoftType.Normal, False)
+        if lofts:
+            if isinstance(lofts, tuple) and len(lofts) > 0:
+                loft_array = lofts[0]
+            else:
+                loft_array = lofts
+            loft_list = [b for b in loft_array if b is not None]
+            if len(loft_list) > 0:
+                debug_log("Bisector", "SUCCESS", "Generated bisector surface with extended side edges")
+                return loft_list[0], crv_start
+
+    debug_log("Bisector", "FAILED", "Loft operation failed")
+    return None, None
+
+
+def build_t_fin_surface(bisector_brep, primary_edge, dist1, dist2, samples, tolerance):
+    """Generates a perpendicular T-fin surface along the primary edge of the bisector."""
+    if not bisector_brep or not primary_edge or bisector_brep.Faces.Count == 0:
+        debug_log("T-Fin", "FAILED", "Missing bisector or edge curve")
+        return None, None, None
+
+    face = bisector_brep.Faces[0]
+    t_vals = primary_edge.DivideByCount(samples, True)
+    if not t_vals:
+        return None, None, None
+
+    pts1 = []
+    pts2 = []
+
+    for t in t_vals:
+        pt = primary_edge.PointAt(t)
+        ok, u, v = face.ClosestPoint(pt)
+        normal = face.NormalAt(u, v) if ok else rg.Vector3d.ZAxis
+        normal.Unitize()
+
+        pts1.append(pt + (normal * dist1))
+        pts2.append(pt - (normal * dist2))
+
+    crv1 = rg.NurbsCurve.CreateInterpolatedCurve(pts1, 3)
+    crv2 = rg.NurbsCurve.CreateInterpolatedCurve(pts2, 3)
+
+    if crv1 and crv2:
+        lofts = rg.Brep.CreateFromLoft([crv1, crv2], rg.Point3d.Unset, rg.Point3d.Unset, rg.LoftType.Normal, False)
+        if lofts:
+            if isinstance(lofts, tuple) and len(lofts) > 0:
+                loft_array = lofts[0]
+            else:
+                loft_array = lofts
+            loft_list = [b for b in loft_array if b is not None]
+            if len(loft_list) > 0:
+                debug_log("T-Fin", "SUCCESS", "Generated fin surface")
+                return loft_list[0], crv1, crv2
+
+    debug_log("T-Fin", "FAILED", "Fin loft calculation failed")
+    return None, None, None
+
+
+def intersect_with_shell(offset_bisector_brep, original_shell_brep, tolerance):
+    """Intersects offset bisector surface with the original shell."""
+    if not offset_bisector_brep or not original_shell_brep:
+        return []
+
+    res = rg.Intersect.Intersection.BrepBrep(offset_bisector_brep, original_shell_brep, tolerance)
+    if isinstance(res, tuple) and len(res) >= 2:
+        ok, curves = res[0], res[1]
+        if ok and curves:
+            crv_list = [c for c in curves if c is not None]
+            debug_log("Intersection", "Result", "Found {0} intersection curves".format(len(crv_list)))
+            return crv_list
+    debug_log("Intersection", "Result", "Found 0 intersection curves")
+    return []
+
+
+def loft_fin_to_shell(fin_edge, int_curves, tolerance):
+    """Lofts a connecting surface between a T-fin edge and the matching shell intersection curve."""
+    if not fin_edge or not int_curves:
+        debug_log("Loft", "SKIPPED", "Missing fin edge or intersection curves")
+        return None
+
+    pt_start = fin_edge.PointAtStart
+    best_crv = None
+    min_dist = float("inf")
+
+    for crv in int_curves:
+        if not crv:
+            continue
+        ok, t = crv.ClosestPoint(pt_start)
+        if ok:
+            d = pt_start.DistanceTo(crv.PointAt(t))
+            if d < min_dist:
+                min_dist = d
+                best_crv = crv
+
+    if not best_crv:
+        debug_log("Loft", "FAILED", "No matching intersection curve found")
+        return None
+
+    crv1 = fin_edge.DuplicateCurve()
+    crv2 = best_crv.DuplicateCurve()
+
+    # Align curve directions before lofting to avoid twisting
+    if not rg.Curve.DoDirectionsMatch(crv1, crv2):
+        crv2.Reverse()
+
+    lofts = rg.Brep.CreateFromLoft([crv1, crv2], rg.Point3d.Unset, rg.Point3d.Unset, rg.LoftType.Normal, False)
+    if lofts:
+        if isinstance(lofts, tuple) and len(lofts) > 0:
+            loft_array = lofts[0]
+        else:
+            loft_array = lofts
+        if loft_array:
+            loft_list = [b for b in loft_array if isinstance(b, rg.Brep)]
+            if loft_list:
+                debug_log("Loft", "SUCCESS", "Lofted connecting surface generated (Dist: {0:.3f})".format(min_dist))
+                return loft_list[0]
+
+    debug_log("Loft", "FAILED", "Loft calculation returned empty")
+    return None
+
+
+def get_or_create_layer(layer_name, color):
+    """Creates a color-coded layer in the document."""
+    layer_idx = sc.doc.Layers.Find(layer_name, True)
+    if layer_idx < 0:
+        new_layer = Rhino.DocObjects.Layer()
+        new_layer.Name = layer_name
+        new_layer.Color = color
+        layer_idx = sc.doc.Layers.Add(new_layer)
+    return layer_idx
+
+
+def bake_item(geom, layer_name, color):
+    """Bakes geometry object to a dedicated color-coded layer."""
+    if not geom:
+        return System.Guid.Empty
+
+    layer_idx = get_or_create_layer(layer_name, color)
+    attr = Rhino.DocObjects.ObjectAttributes()
+    attr.LayerIndex = layer_idx
+
+    if isinstance(geom, rg.Brep):
+        return sc.doc.Objects.AddBrep(geom, attr)
+    elif isinstance(geom, rg.Curve):
+        return sc.doc.Objects.AddCurve(geom, attr)
+    return System.Guid.Empty
+
 
 def main():
-    """
-    Main workflow with undo wrapping. Cleanup (EndUndoRecord, EnableRedraw)
-    lives in `finally` so it runs exactly once no matter which return/
-    exception path is taken - every early-return branch below can just
-    `return` and trust it happens.
-    """
+    doc = sc.doc
+    tol = doc.ModelAbsoluteTolerance
 
-    doc = Rhino.RhinoDoc.ActiveDoc
-    undo_serial = doc.BeginUndoRecord("Shell Bisector T-Surface")
+    print("==========================================")
+    print("RHINO SHELL BISECTOR & T-SURFACE TOOL")
+    print("==========================================")
+
+    # Step 1: Select Original Shell
+    orig_id = rs.GetObject("Select ORIGINAL shell polysurface", rs.filter.surface | rs.filter.polysurface)
+    if not orig_id:
+        debug_log("Step 1", "ABORTED", "No original shell selected")
+        return
+
+    orig_brep = extract_brep(orig_id)
+    debug_log("Step 1", "Original Shell Loaded", "GUID: {0}".format(orig_id))
+
+    # Step 2: Prompt Parameters
+    params = prompt_parameters()
+    if not params:
+        debug_log("Step 2", "ABORTED", "Parameter setup canceled")
+        return
+
+    # Step 3: Compute & Bake Shell Offset
+    offset_brep = offset_shell(orig_brep, params["shell_offset"], tol)
+    if not offset_brep:
+        debug_log("Step 3", "FAILED", "Could not offset original shell")
+        return
+
+    offset_id = bake_item(offset_brep, "02_Shell_Offset", System.Drawing.Color.Cyan)
+    doc.Views.Redraw()
+    debug_log("Step 3", "Shell Offset Created", "GUID: {0}".format(offset_id))
+
+    # Step 4: Select 2 Surfaces on Shell Offset
+    print("\n--- SELECT SURFACES ON SHELL OFFSET ---")
+    srf1_brep, idx1 = get_surface_subobject("Select FIRST surface on the created shell offset")
+    if not srf1_brep:
+        debug_log("Step 4", "ABORTED", "First surface selection canceled")
+        return
+
+    srf2_brep, idx2 = get_surface_subobject("Select SECOND surface on the created shell offset")
+    if not srf2_brep:
+        debug_log("Step 4", "ABORTED", "Second surface selection canceled")
+        return
+
+    # Map selected offset faces to target corresponding faces on original shell
+    orig_srf1 = get_corresponding_original_face(orig_brep, srf1_brep, idx1)
+    orig_srf2 = get_corresponding_original_face(orig_brep, srf2_brep, idx2)
+    target_orig_faces = [f for f in [orig_srf1, orig_srf2] if f is not None]
+
+    undo_rec = doc.BeginUndoRecord("Shell Bisector & T-Surface")
 
     try:
-        # Get input shell
-        shell_id = rs.GetObject("Select shell polysurface", rs.filter.polysurface)
-        if not shell_id:
-            print("No shell selected.")
-            return
+        sample_count = 30
 
-        rs.EnableRedraw(False)
+        # Step 5: Compute Bisector Surface (with side extension)
+        bisector_brep, primary_edge = compute_bisector_surface(
+            srf1_brep, srf2_brep, params["bisector_len"], params["side_ext"], sample_count, tol
+        )
+        if bisector_brep:
+            bake_item(bisector_brep, "03_Bisector", System.Drawing.Color.Yellow)
 
-        # Stage 1: Offset just the two selected panels, not the whole shell.
-        # Offsetting an entire multi-panel hull as one polysurface is fragile
-        # (self-intersection at concave/tight regions on real geometry) and
-        # unnecessary - everything downstream only ever uses these two
-        # panels plus the original (unoffset) shell.
-        offset_layer = ensure_layer("ShellBisector::01_OffsetPanels")
+        # Step 6: Build T-Fin Surface
+        fin_brep, fin_edge1, fin_edge2 = build_t_fin_surface(
+            bisector_brep, primary_edge, params["fin_dist1"], params["fin_dist2"], sample_count, tol
+        )
+        if fin_brep:
+            bake_item(fin_brep, "04_T_Fin", System.Drawing.Color.Magenta)
 
-        original_faces = rs.ExplodePolysurfaces(shell_id)
-        if not original_faces or len(original_faces) < 2:
-            print("Shell has fewer than 2 faces")
-            return
+        # Step 7: Offset Bisector Surface (+ / -)
+        bisector_pos = offset_shell(bisector_brep, params["off_pos"], tol)
+        bisector_neg = offset_shell(bisector_brep, -params["off_neg"], tol)
 
-        surf1_orig_id = original_faces[BISECT_SURFACE_1_INDEX] if BISECT_SURFACE_1_INDEX < len(original_faces) else None
-        surf2_orig_id = original_faces[BISECT_SURFACE_2_INDEX] if BISECT_SURFACE_2_INDEX < len(original_faces) else None
+        if bisector_pos:
+            bake_item(bisector_pos, "05_OffsetBisector_Pos", System.Drawing.Color.Orange)
+        if bisector_neg:
+            bake_item(bisector_neg, "05_OffsetBisector_Neg", System.Drawing.Color.Purple)
 
-        if not surf1_orig_id or not surf2_orig_id:
-            print("Invalid surface indices")
-            return
+        # Step 8: Intersect Offset Bisectors ONLY with target ORIGINAL shell surfaces
+        crvs_pos = intersect_with_shell(bisector_pos, target_orig_faces, tol)
+        crvs_neg = intersect_with_shell(bisector_neg, target_orig_faces, tol)
 
-        surf1_id = rs.OffsetSurface(surf1_orig_id, OFFSET_DISTANCE, create_solid=False)
-        surf2_id = rs.OffsetSurface(surf2_orig_id, OFFSET_DISTANCE, create_solid=False)
+        for c in crvs_pos + crvs_neg:
+            bake_item(c, "06_Intersections", System.Drawing.Color.Red)
 
-        if not surf1_id or not surf2_id:
-            print("Failed to offset selected panels (try a smaller OFFSET_DISTANCE)")
-            return
+        # Step 9: Loft Fin Edges to Shell Intersections
+        srf_pos = loft_fin_to_shell(fin_edge1, crvs_pos, tol)
+        srf_neg = loft_fin_to_shell(fin_edge2, crvs_neg, tol)
 
-        rs.ObjectLayer(surf1_id, offset_layer)
-        rs.ObjectLayer(surf2_id, offset_layer)
+        result_ids = []
+        if srf_pos:
+            id_p = bake_item(srf_pos, "07_FinalLofts", System.Drawing.Color.Green)
+            result_ids.append(id_p)
+        if srf_neg:
+            id_n = bake_item(srf_neg, "07_FinalLofts", System.Drawing.Color.Green)
+            result_ids.append(id_n)
 
-        if DEBUG:
-            print("=== Stage 1: Offset ===")
-            print("Offset panels created: yes")
+        if result_ids:
+            rs.AddObjectsToGroup(result_ids, "Shell_Bisector_Result")
 
-        if STOP_AFTER_STAGE == "offset":
-            return
-
-        # Stage 2: Compute bisector surface
-        if DEBUG:
-            print("=== Stage 2: Bisector Surface ===")
-
-        seam_curve = find_seam_curve(surf1_id, surf2_id)
-        bisector_id = compute_bisector_surface(seam_curve, surf1_id, surf2_id)
-
-        if not bisector_id:
-            print("Failed to create bisector surface")
-            return
-
-        if STOP_AFTER_STAGE == "bisector":
-            return
-
-        # Stage 3: Build T geometry
-        if DEBUG:
-            print("=== Stage 3: T Geometry ===")
-
-        t_brep_id, t_edges = build_t_geometry(bisector_id)
-
-        if STOP_AFTER_STAGE == "t_geometry":
-            return
-
-        # Stage 4: Offset bisector
-        if DEBUG:
-            print("=== Stage 4: Bisector Offset ===")
-
-        offset_out_id, offset_in_id = offset_bisector(bisector_id)
-
-        if not offset_out_id or not offset_in_id:
-            print("Failed to offset bisector")
-            return
-
-        if STOP_AFTER_STAGE == "bisector_offset":
-            return
-
-        # Stage 5: Intersect
-        if DEBUG:
-            print("=== Stage 5: Intersection ===")
-
-        intersection_curves = intersect_surfaces(offset_out_id, offset_in_id, shell_id)
-
-        if not intersection_curves:
-            print("No intersection curves found (check BISECTOR_SURFACE_REACH)")
-            return
-
-        if STOP_AFTER_STAGE == "intersect":
-            return
-
-        # Stage 6: Loft
-        if DEBUG:
-            print("=== Stage 6: Final Loft ===")
-
-        loft_id = loft_surfaces(t_edges, intersection_curves)
-
-        if not loft_id:
-            print("Final loft failed")
-            return
-
-        # Create group for real outputs
-        group_name = "ShellBisector_Output"
-        rs.AddGroup(group_name)
-        for obj_id in [bisector_id, offset_out_id, offset_in_id, loft_id]:
-            if obj_id:
-                rs.AddObjectToGroup(obj_id, group_name)
-        if t_brep_id:
-            rs.AddObjectToGroup(t_brep_id, group_name)
-
-        if DEBUG:
-            print("=== Complete ===")
-            print("Outputs grouped in '%s'" % group_name)
+        print("\n==========================================")
+        debug_log("Execution", "COMPLETE", "Check baked layers 02 through 07 in Rhino viewport.")
+        print("==========================================")
 
     except Exception as e:
-        print("Error: %s" % str(e))
-        import traceback
-        traceback.print_exc()
-
+        debug_log("Execution", "ERROR", str(e))
     finally:
-        doc.EndUndoRecord(undo_serial)
-        rs.EnableRedraw(True)
+        doc.Views.Redraw()
+        doc.EndUndoRecord(undo_rec)
+
 
 if __name__ == "__main__":
     main()
