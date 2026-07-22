@@ -457,82 +457,103 @@ def main():
     doc.Views.Redraw()
     debug_log("Step 3", "Shell Offset Created", "GUID: {0}".format(offset_id))
 
-    # Step 4: Select 2 Surfaces on Shell Offset
-    print("\n--- SELECT SURFACES ON SHELL OFFSET ---")
-    srf1_brep, idx1 = get_surface_subobject("Select FIRST surface on the created shell offset")
-    if not srf1_brep:
-        debug_log("Step 4", "ABORTED", "First surface selection canceled")
-        return
+    # Step 4: Select pairs of surfaces on the shell offset, one junction at a
+    # time. Cancel ("Esc") on the FIRST-surface prompt of a pair to stop -
+    # this lets one script run handle every seam on the hull instead of
+    # re-selecting the shell and re-entering every parameter per junction.
+    junction_count = 0
 
-    srf2_brep, idx2 = get_surface_subobject("Select SECOND surface on the created shell offset")
-    if not srf2_brep:
-        debug_log("Step 4", "ABORTED", "Second surface selection canceled")
-        return
+    while True:
+        attempt_num = junction_count + 1
+        print("\n--- SELECT SURFACES FOR JUNCTION {0} (Esc on first pick to finish) ---".format(attempt_num))
 
-    # Map selected offset faces to target corresponding faces on original shell
-    orig_srf1 = get_corresponding_original_face(orig_brep, srf1_brep, idx1)
-    orig_srf2 = get_corresponding_original_face(orig_brep, srf2_brep, idx2)
-    target_orig_faces = [f for f in [orig_srf1, orig_srf2] if f is not None]
-
-    undo_rec = doc.BeginUndoRecord("Shell Bisector & T-Surface")
-
-    try:
-        sample_count = 30
-
-        # Step 5: Compute Bisector Surface (with side extension)
-        bisector_brep, primary_edge = compute_bisector_surface(
-            srf1_brep, srf2_brep, params["bisector_len"], params["side_ext"], sample_count, tol
+        srf1_brep, idx1 = get_surface_subobject(
+            "Select FIRST surface for junction {0} (Esc when finished with all junctions)".format(attempt_num)
         )
-        if bisector_brep:
-            bake_item(bisector_brep, "03_Bisector", System.Drawing.Color.Yellow)
+        if not srf1_brep:
+            debug_log("Step 4", "DONE", "No more junctions selected")
+            break
 
-        # Step 6: Build T-Fin Surface
-        fin_brep, fin_edge1, fin_edge2 = build_t_fin_surface(
-            bisector_brep, primary_edge, params["fin_dist1"], params["fin_dist2"], sample_count, tol
-        )
-        if fin_brep:
-            bake_item(fin_brep, "04_T_Fin", System.Drawing.Color.Magenta)
+        srf2_brep, idx2 = get_surface_subobject("Select SECOND surface for junction {0}".format(attempt_num))
+        if not srf2_brep:
+            debug_log("Step 4", "ABORTED", "Second surface selection canceled for junction {0}".format(attempt_num))
+            break
 
-        # Step 7: Offset Bisector Surface (+ / -)
-        bisector_pos = offset_shell(bisector_brep, params["off_pos"], tol)
-        bisector_neg = offset_shell(bisector_brep, -params["off_neg"], tol)
+        junction_count = attempt_num
 
-        if bisector_pos:
-            bake_item(bisector_pos, "05_OffsetBisector_Pos", System.Drawing.Color.Orange)
-        if bisector_neg:
-            bake_item(bisector_neg, "05_OffsetBisector_Neg", System.Drawing.Color.Purple)
+        # Map selected offset faces to target corresponding faces on original shell
+        orig_srf1 = get_corresponding_original_face(orig_brep, srf1_brep, idx1)
+        orig_srf2 = get_corresponding_original_face(orig_brep, srf2_brep, idx2)
+        target_orig_faces = [f for f in [orig_srf1, orig_srf2] if f is not None]
 
-        # Step 8: Intersect Offset Bisectors ONLY with target ORIGINAL shell surfaces
-        crvs_pos = intersect_with_shell(bisector_pos, target_orig_faces, tol)
-        crvs_neg = intersect_with_shell(bisector_neg, target_orig_faces, tol)
+        undo_rec = doc.BeginUndoRecord("Shell Bisector & T-Surface - Junction {0}".format(junction_count))
 
-        for c in crvs_pos + crvs_neg:
-            bake_item(c, "06_Intersections", System.Drawing.Color.Red)
+        try:
+            sample_count = 30
 
-        # Step 9: Loft Fin Edges to Shell Intersections
-        srf_pos = loft_fin_to_shell(fin_edge1, crvs_pos, tol)
-        srf_neg = loft_fin_to_shell(fin_edge2, crvs_neg, tol)
+            # Step 5: Compute Bisector Surface (with side extension)
+            bisector_brep, primary_edge = compute_bisector_surface(
+                srf1_brep, srf2_brep, params["bisector_len"], params["side_ext"], sample_count, tol
+            )
+            if bisector_brep:
+                bake_item(bisector_brep, "03_Bisector", System.Drawing.Color.Yellow)
 
-        result_ids = []
-        if srf_pos:
-            id_p = bake_item(srf_pos, "07_FinalLofts", System.Drawing.Color.Green)
-            result_ids.append(id_p)
-        if srf_neg:
-            id_n = bake_item(srf_neg, "07_FinalLofts", System.Drawing.Color.Green)
-            result_ids.append(id_n)
+            # Step 6: Build T-Fin Surface
+            fin_brep, fin_edge1, fin_edge2 = build_t_fin_surface(
+                bisector_brep, primary_edge, params["fin_dist1"], params["fin_dist2"], sample_count, tol
+            )
+            if fin_brep:
+                bake_item(fin_brep, "04_T_Fin", System.Drawing.Color.Magenta)
 
-        if result_ids:
-            rs.AddObjectsToGroup(result_ids, "Shell_Bisector_Result")
+            # Step 7: Offset Bisector Surface (+ / -)
+            bisector_pos = offset_shell(bisector_brep, params["off_pos"], tol)
+            bisector_neg = offset_shell(bisector_brep, -params["off_neg"], tol)
 
-        print("\n==========================================")
-        debug_log("Execution", "COMPLETE", "Check baked layers 02 through 07 in Rhino viewport.")
-        print("==========================================")
+            if bisector_pos:
+                bake_item(bisector_pos, "05_OffsetBisector_Pos", System.Drawing.Color.Orange)
+            if bisector_neg:
+                bake_item(bisector_neg, "05_OffsetBisector_Neg", System.Drawing.Color.Purple)
 
-    except Exception as e:
-        debug_log("Execution", "ERROR", str(e))
-    finally:
-        doc.Views.Redraw()
-        doc.EndUndoRecord(undo_rec)
+            # Step 8: Intersect Offset Bisectors ONLY with target ORIGINAL shell surfaces
+            crvs_pos = intersect_with_shell(bisector_pos, target_orig_faces, tol)
+            crvs_neg = intersect_with_shell(bisector_neg, target_orig_faces, tol)
+
+            for c in crvs_pos + crvs_neg:
+                bake_item(c, "06_Intersections", System.Drawing.Color.Red)
+
+            # Step 9: Loft Fin Edges to Shell Intersections
+            srf_pos = loft_fin_to_shell(fin_edge1, crvs_pos, tol)
+            srf_neg = loft_fin_to_shell(fin_edge2, crvs_neg, tol)
+
+            result_ids = []
+            if srf_pos:
+                id_p = bake_item(srf_pos, "07_FinalLofts", System.Drawing.Color.Green)
+                result_ids.append(id_p)
+            if srf_neg:
+                id_n = bake_item(srf_neg, "07_FinalLofts", System.Drawing.Color.Green)
+                result_ids.append(id_n)
+
+            if result_ids:
+                group_name = "ShellBisector_Junction_{0:02d}".format(junction_count)
+                # AddObjectsToGroup adds to an EXISTING group only - it does
+                # not create one. The group has to be created first or the
+                # add silently does nothing (this is why final lofts weren't
+                # grouping before).
+                rs.AddGroup(group_name)
+                rs.AddObjectsToGroup(result_ids, group_name)
+                debug_log("Group", "SUCCESS", "{0} object(s) grouped as '{1}'".format(len(result_ids), group_name))
+
+            debug_log("Junction {0}".format(junction_count), "COMPLETE", "")
+
+        except Exception as e:
+            debug_log("Junction {0}".format(junction_count), "ERROR", str(e))
+        finally:
+            doc.Views.Redraw()
+            doc.EndUndoRecord(undo_rec)
+
+    print("\n==========================================")
+    debug_log("Execution", "COMPLETE", "Processed {0} junction(s). Check baked layers 02 through 07.".format(junction_count))
+    print("==========================================")
 
 
 if __name__ == "__main__":

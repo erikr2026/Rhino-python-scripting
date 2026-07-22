@@ -37,33 +37,37 @@ confirmed runs cleanly on the real hull.
 ## What it does
 
 1. Select the original shell polysurface.
-2. Enter offset distance and direction (outward/inward) interactively.
+2. Enter offset distance and direction (outward/inward) interactively, plus
+   bisector/fin parameters - once, for the whole run.
 3. Offsets the whole shell (`Brep.CreateOffsetBrep`, with a face-by-face
    fallback if that fails) and bakes it.
-4. Pick two faces directly off the baked offset polysurface via sub-object
-   (face) selection - not two separate top-level objects.
-5. Maps each selected offset face back to its corresponding face on the
-   *original* (unoffset) shell, by topological index first, falling back to
-   closest-point spatial matching.
+4. Loops over junctions: pick two faces directly off the baked offset
+   polysurface via sub-object (face) selection (not two separate top-level
+   objects), process that junction fully, then prompt for the next pair.
+   Cancel ("Esc") on a junction's first-surface prompt to stop - one script
+   run handles every seam on the hull, not just one.
+5. Per junction: maps each selected offset face back to its corresponding
+   face on the *original* (unoffset) shell, by topological index first,
+   falling back to closest-point spatial matching.
 6. Computes a bisector surface between the two selected offset faces: finds
    their shared intersection edge, averages face normals along it, projects
-   outward by a user-entered length, and extends the resulting curves at
-   both open ends by a user-entered side-extension distance (default 12
-   units) before lofting.
-7. Builds a perpendicular T-fin surface along the bisector's primary edge,
-   offset by two independently-configurable distances.
-8. Offsets the bisector surface both directions (positive/negative,
-   independently configurable).
+   outward by the entered length, and extends the resulting curves at both
+   open ends by the entered side-extension distance before lofting.
+7. Builds a perpendicular T-fin surface along the bisector's primary edge.
+8. Offsets the bisector surface both directions (positive/negative).
 9. Intersects each offset bisector against the *original* (unoffset,
    mapped-back) faces - not the whole original shell.
 10. Lofts a connecting surface between each T-fin edge and its closest
     matching intersection curve, aligning curve directions first
     (`Curve.DoDirectionsMatch`) to avoid twisted lofts.
+11. Groups each junction's final loft outputs under its own group name
+    (`ShellBisector_Junction_01`, `_02`, ...) so multiple junctions' results
+    stay distinguishable.
 
 Every stage bakes its result to a dedicated color-coded layer (`02` through
-`07`) regardless of downstream success, and prints a `debug_log(...)` line to
-the command history - this is the debugging convention to preserve in any
-further revision.
+`07`, shared across all junctions) regardless of downstream success, and
+prints a `debug_log(...)` line to the command history - this is the
+debugging convention to preserve in any further revision.
 
 ## Fixed since first working run
 
@@ -78,6 +82,13 @@ mapped both selected faces to two distinct original panels and hit
 `ERROR | expected Brep, got list` at Step 8, exactly as predicted. Fixed by
 deleting the shadowing single-brep duplicate, leaving only the
 list-iterating version `main()` actually needs.
+
+**Final lofts not grouping (2026-07-22).** `rs.AddObjectsToGroup(ids, name)`
+only adds to a group that *already exists* - it does not create one. The
+script called it directly with a group name that had never been created via
+`rs.AddGroup(name)`, so the call silently did nothing. Fixed by calling
+`rs.AddGroup(group_name)` first. Folded into the multiple-junction change
+above - each junction now creates and populates its own group.
 
 ## Testing plan
 
