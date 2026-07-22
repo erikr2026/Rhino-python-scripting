@@ -11,13 +11,23 @@ Takes a shell polysurface, offsets it, computes a bisector surface between
 two offset panels, builds a T-shaped junction, intersects against the
 original shell, and lofts connecting surfaces.
 
-API signatures verified against Rhino 8 Python console (help() calls):
-- rs.OffsetSurface(surface_id, distance, solid=True)
-- rs.AddLoftSrf(object_ids, start_surface=None, end_surface=None)
+API signatures live-verified against developer.rhino3d.com / mcneel/rhinoscriptsyntax
+source (2026-07-22, after RunPythonScript/first-run bugs surfaced three invented or
+wrong signatures - see the project's Lessons for the full story):
+- rs.OffsetSurface(surface_id, distance, tolerance=None, both_sides=False,
+  create_solid=False) - NOT `solid=`, that keyword doesn't exist
+- rs.AddLoftSrf(object_ids, start=None, end=None, loft_type=0,
+  simplify_method=0, value=0, closed=False) - only called positionally here
+- rs.AddCurve(points, degree=3) - points-only; does NOT accept an existing
+  Curve object, use Objects.AddCurve (see bake_curve() below) for that
+- rs.AddBrep - does not exist in rhinoscriptsyntax at all; use
+  Objects.AddBrep (see bake_brep() below)
 - Curve.DivideByCount(count, create_end_point)
 - BrepFace.NormalAt(u, v) [ignores OrientationIsReversed - must check manually]
 - Intersection.BrepBrep(brep_a, brep_b, tolerance)
 - Brep.DuplicateNakedEdgeCurves(get_internal, get_boundary)
+- rs.UnitAbsoluteTolerance(tolerance=None, in_model_units=True) - returns doc
+  tolerance directly in drawing units, no unit-system conversion needed
 """
 
 import rhinoscriptsyntax as rs
@@ -46,7 +56,7 @@ BISECTOR_SAMPLE_COUNT = 20
 DEBUG = True
 STOP_AFTER_STAGE = None  # "offset" | "bisector" | "t_geometry" | "bisector_offset" | "intersect" | "loft"
 
-TOLERANCE = rs.UnitSystemScale(Rhino.RhinoDoc.ActiveDoc.ModelUnitSystem, Rhino.UnitSystem.Millimeters)
+TOLERANCE = rs.UnitAbsoluteTolerance()
 
 # ============================================================================
 # HELPERS
@@ -64,6 +74,25 @@ def ensure_layer(layer_path):
         if not rs.IsLayer(current):
             rs.AddLayer(current)
     return current
+
+def bake_curve(curve, layer=None):
+    """
+    Add an in-memory Rhino.Geometry.Curve to the document.
+    rs.AddCurve only builds a control-point curve from a list of points -
+    it can't take an existing Curve object, which is what every caller
+    here has. Objects.AddCurve is the correct way to inject one directly.
+    """
+    guid = Rhino.RhinoDoc.ActiveDoc.Objects.AddCurve(curve)
+    if layer:
+        rs.ObjectLayer(guid, layer)
+    return guid
+
+def bake_brep(brep, layer=None):
+    """Add an in-memory Rhino.Geometry.Brep to the document (rs.AddBrep doesn't exist)."""
+    guid = Rhino.RhinoDoc.ActiveDoc.Objects.AddBrep(brep)
+    if layer:
+        rs.ObjectLayer(guid, layer)
+    return guid
 
 def get_surface_from_brep(brep_id):
     """Extract the underlying Surface from a Brep object."""
@@ -193,8 +222,8 @@ def compute_bisector_surface(seam_curve, surf1_id, surf2_id):
 
     # Bake seam and reach curves to debug layer
     seam_layer = ensure_layer("ShellBisector::02_BisectorSeam")
-    seam_id = rs.AddCurve(seam_curve, layer=seam_layer)
-    reach_id = rs.AddCurve(reach_curve, layer=seam_layer)
+    seam_id = bake_curve(seam_curve, layer=seam_layer)
+    reach_id = bake_curve(reach_curve, layer=seam_layer)
 
     if DEBUG:
         print("Seam curve length: %.3f" % seam_curve.GetLength())
@@ -277,10 +306,10 @@ def build_t_geometry(bisector_id):
     t_layer = ensure_layer("ShellBisector::04_TGeometry")
 
     # Add edges as curve IDs for lofting
-    perp_edge_1_id = rs.AddCurve(perp_edge_1, layer=t_layer)
-    perp_edge_2_id = rs.AddCurve(perp_edge_2, layer=t_layer)
-    para_edge_1_id = rs.AddCurve(para_edge_1, layer=t_layer)
-    para_edge_2_id = rs.AddCurve(para_edge_2, layer=t_layer)
+    perp_edge_1_id = bake_curve(perp_edge_1, layer=t_layer)
+    perp_edge_2_id = bake_curve(perp_edge_2, layer=t_layer)
+    para_edge_1_id = bake_curve(para_edge_1, layer=t_layer)
+    para_edge_2_id = bake_curve(para_edge_2, layer=t_layer)
 
     # Loft perpendicular arm
     perp_strip_id = rs.AddLoftSrf([perp_edge_1_id, perp_edge_2_id])
@@ -301,7 +330,7 @@ def build_t_geometry(bisector_id):
             if joined and len(joined) > 0:
                 rs.DeleteObject(perp_strip_id)
                 rs.DeleteObject(para_strip_id)
-                t_brep_id = rs.AddBrep(joined[0], layer=t_layer)
+                t_brep_id = bake_brep(joined[0], layer=t_layer)
             else:
                 t_brep_id = None
         except:
@@ -329,12 +358,12 @@ def offset_bisector(bisector_id):
     offset_layer = ensure_layer("ShellBisector::05_BisectorOffsets")
 
     # Offset outward
-    offset_out_id = rs.OffsetSurface(bisector_id, BISECTOR_OFFSET_DISTANCE, solid=False)
+    offset_out_id = rs.OffsetSurface(bisector_id, BISECTOR_OFFSET_DISTANCE, create_solid=False)
     if offset_out_id:
         rs.ObjectLayer(offset_out_id, offset_layer)
 
     # Offset inward
-    offset_in_id = rs.OffsetSurface(bisector_id, -BISECTOR_OFFSET_DISTANCE, solid=False)
+    offset_in_id = rs.OffsetSurface(bisector_id, -BISECTOR_OFFSET_DISTANCE, create_solid=False)
     if offset_in_id:
         rs.ObjectLayer(offset_in_id, offset_layer)
 
@@ -390,7 +419,7 @@ def intersect_surfaces(offset_out_id, offset_in_id, original_shell_id):
 
         # Bake all curves
         for curve in offset_curves:
-            curve_id = rs.AddCurve(curve, layer=intersect_layer)
+            curve_id = bake_curve(curve, layer=intersect_layer)
             all_curves.append(curve_id)
 
         if DEBUG:
@@ -413,7 +442,7 @@ def loft_surfaces(t_edges, intersection_curves):
 
     # Add T edges
     for edge in t_edges:
-        edge_id = rs.AddCurve(edge)
+        edge_id = bake_curve(edge)
         all_curves.append(edge_id)
 
     # Add intersection curves
@@ -475,7 +504,7 @@ def main():
         offset_layer = ensure_layer("ShellBisector::01_OffsetShell")
         offset_surfaces = []
 
-        offset_id = rs.OffsetSurface(shell_id, OFFSET_DISTANCE, solid=False)
+        offset_id = rs.OffsetSurface(shell_id, OFFSET_DISTANCE, create_solid=False)
         if not offset_id:
             print("Failed to offset shell")
             return
