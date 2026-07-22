@@ -37,6 +37,7 @@ wrong signatures - see the project's Lessons for the full story):
 import rhinoscriptsyntax as rs
 import Rhino
 from Rhino.Geometry import *
+from Rhino.Geometry.Intersect import Intersection
 
 # ============================================================================
 # PARAMETERS
