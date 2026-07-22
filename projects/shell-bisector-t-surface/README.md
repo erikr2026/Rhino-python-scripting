@@ -1,148 +1,102 @@
 # shell-bisector-t-surface
 
-Standalone Rhino Python script (`rhinoscriptsyntax` + `RhinoCommon`, CPython 3 via
-Rhino 8's PythonNet bridge). Run via Rhino's `RunPythonScript` command — **not** a
-Grasshopper component (this script gathers its own input with `rs.GetObject`; GH
-components get inputs injected as globals instead).
+Standalone Rhino Python script (raw `RhinoCommon` + `rhinoscriptsyntax` for a
+few utility calls, CPython 3 via Rhino 8's PythonNet bridge). Run via Rhino 8's
+**ScriptEditor** command (type `ScriptEditor`, open this file, press F5) —
+**not** `RunPythonScript`, which invokes the legacy IronPython 2 engine
+instead and will fail (confirmed 2026-07-22: `RunPythonScript` choked on a
+non-ASCII docstring character with a Python-2-only encoding-declaration
+error). Also **not** a Grasshopper component (this script gathers its own
+input interactively; GH components get inputs injected as globals instead).
 
-**Status (2026-07-22): design complete, implementation not yet written.** The
-geometry algorithm below was worked out and reviewed; `shell_bisector_t_surface.py`
-still needs to be written from this design. This is expected to take several
-revisions once real-Rhino testing starts — see Testing plan below.
+**Status (2026-07-22): working, first successful full run on the real hull.**
+Confirmed end-to-end on real geometry (not just a trivial test shape) —
+console log showed every stage succeeding through the final loft.
+
+## History
+
+The first implementation (rhinoscriptsyntax-based, fixed module-level
+parameters, no interactive input) went through several real-Rhino bug fixes
+in this session — see the project's Lessons for the full list (invented API
+calls, wrong keyword names, `BeginUndoRecord`/`EndUndoRecord` argument
+mistakes, offsetting the whole hull instead of just the two needed panels,
+a missing `Intersection` import). That version never got past the second
+"compute bisector surface" stage before the owner needed interactive offset
+distance/direction and sub-object face picking on a real polysurface -
+capabilities the rhinoscriptsyntax approach couldn't provide (`rs.GetObject`
+with a surface filter can't pick individual faces off a joined polysurface).
+
+The owner worked with a different tool in parallel to add that interactively,
+which required moving to raw `RhinoCommon` calls (`Rhino.Input.Custom.GetObject`
+with `SubObjectSelect = True`, `Rhino.Geometry.Brep.CreateOffsetBrep`,
+`Rhino.Geometry.Intersect.Intersection.BrepBrep`, `Rhino.Geometry.Brep.CreateFromLoft`).
+That surfaced a second wave of Rhino-8/9-CPython-specific gotchas along the
+way (see Lessons) before landing on the version below, which the owner
+confirmed runs cleanly on the real hull.
 
 ## What it does
 
-Takes a shell polysurface, offsets it, computes a "bisector surface" between two
-of the offset panels (the surface bisecting the dihedral angle along their shared
-seam), builds a T-shaped junction off that bisector, offsets the bisector both
-directions, intersects those offsets against the *original* (unoffset) shell, and
-lofts connecting surfaces between those intersection curves and the T's long edges.
+1. Select the original shell polysurface.
+2. Enter offset distance and direction (outward/inward) interactively, plus
+   bisector/fin parameters - once, for the whole run.
+3. Offsets the whole shell (`Brep.CreateOffsetBrep`, with a face-by-face
+   fallback if that fails) and bakes it.
+4. Loops over junctions: pick two faces directly off the baked offset
+   polysurface via sub-object (face) selection (not two separate top-level
+   objects), process that junction fully, then prompt for the next pair.
+   Cancel ("Esc") on a junction's first-surface prompt to stop - one script
+   run handles every seam on the hull, not just one.
+5. Per junction: maps each selected offset face back to its corresponding
+   face on the *original* (unoffset) shell, by topological index first,
+   falling back to closest-point spatial matching.
+6. Computes a bisector surface between the two selected offset faces: finds
+   their shared intersection edge, averages face normals along it, projects
+   outward by the entered length, and extends the resulting curves at both
+   open ends by the entered side-extension distance before lofting.
+7. Builds a perpendicular T-fin surface along the bisector's primary edge.
+8. Offsets the bisector surface both directions (positive/negative).
+9. Intersects each offset bisector against the *original* (unoffset,
+   mapped-back) faces - not the whole original shell.
+10. Lofts a connecting surface between each T-fin edge and its closest
+    matching intersection curve, aligning curve directions first
+    (`Curve.DoDirectionsMatch`) to avoid twisted lofts.
+11. Groups each junction's final loft outputs under its own group name
+    (`ShellBisector_Junction_01`, `_02`, ...) so multiple junctions' results
+    stay distinguishable.
 
-## Parameters
+Every stage bakes its result to a dedicated color-coded layer (`02` through
+`07`, shared across all junctions) regardless of downstream success, and
+prints a `debug_log(...)` line to the command history - this is the
+debugging convention to preserve in any further revision.
 
-```python
-OFFSET_DISTANCE = 2.0              # distance to offset the shell
-BISECT_SURFACE_1_INDEX = 0         # index of first surface to bisect (within the offset shell)
-BISECT_SURFACE_2_INDEX = 1         # index of second surface to bisect
-BISECTOR_DIRECTION = 1             # 1 outward, -1 inward
-BISECTOR_OFFSET_DISTANCE = 0.5     # offset the bisector surface both directions (thin sandwich)
-T_ARM_PERPENDICULAR_OFFSET = 1.0   # T-arm perpendicular to bisector
-T_ARM_PARALLEL_OFFSET = 0.75       # T-arm parallel (along bisector)
-BISECTOR_START_POINT_PARAMETER = 0.5  # 0-1 param along bisector seam for T origin
+## Fixed since first working run
 
-# Two gaps in the original spec — assumed defaults, confirm/tune during testing:
-BISECTOR_SURFACE_REACH = OFFSET_DISTANCE * 1.5  # how far the bisector extends from the seam
-T_ARM_WIDTH = min(T_ARM_PERPENDICULAR_OFFSET, T_ARM_PARALLEL_OFFSET) * 0.2  # T-arm strip width
+**Duplicate `intersect_with_shell` definition (2026-07-22).** Two functions
+shared this name: one taking a *list* of original faces (iterates and
+intersects against each), and one taking a *single* original brep (no
+iteration). Python kept only the second - the first was dead code, and
+`main()` was calling the survivor with a list. It happened to work on the
+very first real-hull run (log read "Found 1 intersection curves") because
+`target_orig_faces` had exactly one element that run; the very next run
+mapped both selected faces to two distinct original panels and hit
+`ERROR | expected Brep, got list` at Step 8, exactly as predicted. Fixed by
+deleting the shadowing single-brep duplicate, leaving only the
+list-iterating version `main()` actually needs.
 
-# Tuning knobs
-BISECTOR_SAMPLE_COUNT = 20          # points sampled along the seam for bisector construction
-DEBUG = True
-STOP_AFTER_STAGE = None             # "offset" | "bisector" | "t_geometry" | "bisector_offset" | "intersect" | "loft"
-```
-
-**Why the two new parameters exist:** the original spec had no length/reach for
-the bisector surface itself (only `BISECTOR_OFFSET_DISTANCE`, a thin ±0.5 *sandwich*
-offset of the whole surface, not a footprint extension) — but for the later
-intersection step against the original shell to be geometrically possible, the
-bisector has to physically reach back across roughly `OFFSET_DISTANCE`. Similarly
-there was no width/thickness for the T-arms, only offset *lengths*. Both defaults
-above are starting points, not verified-correct values — expect to retune both
-once testing on a real shell.
-
-## Algorithm
-
-**`compute_bisector_surface`** — no built-in Rhino bisector primitive, so:
-1. Find the shared seam between the two chosen offset panels: try matching naked
-   edges first (`brep.DuplicateNakedEdgeCurves(True, True)` on each single-face
-   Brep, match by endpoint/midpoint distance within tolerance); fall back to
-   `Rhino.Geometry.Intersect.Intersection.BrepBrep(brep_a, brep_b, tol)` if no
-   naked-edge match is found (offset can introduce small gaps on curved panels).
-2. Sample the seam curve (`Curve.DivideByCount`); at each sample get each
-   surface's normal via `Face.ClosestPoint` + `Face.NormalAt` — **flip sign if
-   `BrepFace.OrientationIsReversed`** (`NormalAt` ignores that flag, a real
-   gotcha).
-3. Bisecting vector per sample = `normalize(normal_a + normal_b)`, negated if
-   `BISECTOR_DIRECTION == -1`. This assumes the two panels' face normals are
-   already consistently oriented — if the real hull shell has mixed-orientation
-   panels after `ExplodePolysurfaces`, add a pre-flight sanity check (e.g. compare
-   against a bounding-box-center-to-panel-centroid heuristic) before trusting this.
-4. Project each seam point along its bisecting vector by `BISECTOR_SURFACE_REACH`
-   to get a second "reach" curve; loft seam curve + reach curve (`rs.AddLoftSrf`,
-   straight sections) into the bisector surface. Bake the seam and reach curves to
-   a debug layer regardless of downstream success.
-
-**`build_t_geometry` + `extract_t_edges`** — sidesteps "long vs. end-cap edge"
-classification by constructing the 4 long edges directly instead of extracting
-them after the fact:
-1. Get a local frame at `BISECTOR_START_POINT_PARAMETER`: surface normal
-   (perpendicular-arm direction), seam tangent (parallel-arm direction), their
-   cross product (shared width axis). Re-orthogonalize if the two aren't close to
-   perpendicular in practice.
-2. Build the 4 long edges as explicit line pairs offset by `±T_ARM_WIDTH/2` along
-   the width axis (2 for the perpendicular arm, 2 for the parallel arm).
-3. Loft each pair into a strip, join into one T-Brep (non-fatal if join doesn't
-   fully merge — the 4 tracked curves don't depend on it).
-4. `extract_t_edges` returns those 4 tracked curves directly, plus an optional
-   debug cross-check against `DuplicateNakedEdgeCurves` count (never used to make
-   the actual long/short decision).
-
-**`intersect_surfaces`** — brute-force pairwise, don't assume index correspondence
-between offset-shell panel indices and the original shell's exploded surface list
-(not guaranteed stable). Test each of the 2 bisector-offset Breps against every
-original-shell surface via `Intersection.BrepBrep`. Most pairs legitimately return
-empty; zero curves across *all* pairs for one offset-bisector Brep is the real
-error case (surface a message pointing at `BISECTOR_SURFACE_REACH` being too
-short). Bake all found curves regardless.
-
-**`loft_surfaces`** — combine intersection curves + T long-edges, sort by
-projecting each curve's midpoint (`PointAtNormalizedLength(0.5)`) onto the seam
-tangent axis, reverse any curve whose start point is closer to the previous
-curve's end than its start (anti-twist prep), then `rs.AddLoftSrf`.
-
-**`main()`** — one undo record wrapping the whole run
-(`Rhino.RhinoDoc.ActiveDoc.BeginUndoRecord`/`EndUndoRecord` directly — the
-`rs.BeginUndoRecord` wrapper is known-unreliable). Each stage bakes its own output
-as it computes, so partial progress stays visible even if a later stage fails.
-`rs.EnableRedraw(False)` only after all `rs.GetObject` prompts finish.
-
-## Layer scheme
-
-```
-ShellBisector::01_OffsetShell
-ShellBisector::02_BisectorSeam        (seam + reach curves, debug)
-ShellBisector::03_BisectorSurface
-ShellBisector::04_TGeometry
-ShellBisector::05_BisectorOffsets
-ShellBisector::06_IntersectionCurves
-ShellBisector::07_FinalLoft
-```
-
-Final `rs.AddObjectsToGroup` covers only the "real" outputs (T surface, bisector,
-bisector offsets, final loft) — debug/intermediate curves stay ungrouped so you
-can hide/delete them independently.
+**Final lofts not grouping (2026-07-22).** `rs.AddObjectsToGroup(ids, name)`
+only adds to a group that *already exists* - it does not create one. The
+script called it directly with a group name that had never been created via
+`rs.AddGroup(name)`, so the call silently did nothing. Fixed by calling
+`rs.AddGroup(group_name)` first. Folded into the multiple-junction change
+above - each junction now creates and populates its own group.
 
 ## Testing plan
 
-0. **Verify API signatures in Rhino's own Python console first** —
-   `help(rs.AddLoftSrf)`, `help(rs.OffsetSurface)`, and a scratch test of
-   `Intersection.BrepBrep(...)` / `Curve.DivideByCount(...)` return shapes. This
-   queries the actual installed API rather than possibly-stale docs and needs no
-   network access. Note confirmed signatures as a comment at the top of the script
-   once done — the implementation below used trained-knowledge signatures where
-   not otherwise notable, since live doc domains (`developer.rhino3d.com`,
-   McNeel forum) weren't reachable from the Claude Code environment used to design
-   this (network policy gap, not a permanent block — see
-   `memory/projects/rhino-python-scripting.md` for the environment note).
-1. Start on a trivial 2-panel test shell (e.g. an open box corner), not the real
-   hull — isolates bisector-algorithm bugs from shell-complexity bugs.
-2. Use `DEBUG` / `STOP_AFTER_STAGE` to stop after any named stage and inspect the
-   just-baked layer before moving on.
-3. With `DEBUG = True`, print seam curve length, sample points that projected
-   successfully, resolved `BISECTOR_SURFACE_REACH`, naked-edge count on the
-   T-Brep, intersection-curve counts per pair, final ordered curve count.
-4. Toggle `ShellBisector::*` layers individually to confirm each stage before
-   trusting the next.
-5. Once clean on the trivial shell, re-run on the real hull shell, retuning
-   `BISECTOR_SAMPLE_COUNT` / `BISECTOR_SURFACE_REACH` / `T_ARM_WIDTH` as needed.
-   Keep `STOP_AFTER_STAGE` in the shipped script rather than removing it once
-   "done" — more revisions are expected.
+1. Confirm the bisector's side-extension length and the two independent
+   T-fin offset distances against real fabrication tolerances - defaults
+   (12", 1.0, 1.0) were chosen as placeholders during development, not
+   verified against the actual part.
+2. Check whether `get_corresponding_original_face`'s topological-index-first
+   matching is reliable across the whole hull, or whether it's silently
+   falling back to spatial matching more often than expected (both paths log
+   distinctly via `debug_log("Face Mapping", ...)`).
