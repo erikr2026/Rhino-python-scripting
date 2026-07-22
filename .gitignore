@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+.vs/
+.vscode/*.log
+*.3dmbak
