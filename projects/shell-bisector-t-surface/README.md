@@ -65,31 +65,27 @@ Every stage bakes its result to a dedicated color-coded layer (`02` through
 the command history - this is the debugging convention to preserve in any
 further revision.
 
-## Known issue - not yet fixed
+## Fixed since first working run
 
-**Duplicate `intersect_with_shell` definition.** Two functions share this
-name: an earlier one taking a *list* of original faces (iterates and
-intersects against each), and a later one taking a *single* original brep
-(no iteration). Python keeps only the second definition - the first is dead
-code. `main()` calls it with a list (`target_orig_faces`), which the active
-(single-brep) definition receives as its `original_shell_brep` parameter and
-passes directly to `Intersection.BrepBrep`. This worked in the confirmed run
-(log read "Found 1 intersection curves", matching the second definition's
-message text), most likely because `target_orig_faces` happened to contain
-exactly one element that run. If a future run maps both selected faces to
-two distinct original panels (the more typical case), this is likely to
-throw or misbehave. Flagged, not fixed yet - watch for this if intersection
-counts look wrong or the script errors at Step 8.
+**Duplicate `intersect_with_shell` definition (2026-07-22).** Two functions
+shared this name: one taking a *list* of original faces (iterates and
+intersects against each), and one taking a *single* original brep (no
+iteration). Python kept only the second - the first was dead code, and
+`main()` was calling the survivor with a list. It happened to work on the
+very first real-hull run (log read "Found 1 intersection curves") because
+`target_orig_faces` had exactly one element that run; the very next run
+mapped both selected faces to two distinct original panels and hit
+`ERROR | expected Brep, got list` at Step 8, exactly as predicted. Fixed by
+deleting the shadowing single-brep duplicate, leaving only the
+list-iterating version `main()` actually needs.
 
 ## Testing plan
 
-1. Re-run on the real hull with both selected faces mapping to two *distinct*
-   original panels, to specifically exercise the known issue above.
-2. Confirm the bisector's side-extension length and the two independent
+1. Confirm the bisector's side-extension length and the two independent
    T-fin offset distances against real fabrication tolerances - defaults
    (12", 1.0, 1.0) were chosen as placeholders during development, not
    verified against the actual part.
-3. Check whether `get_corresponding_original_face`'s topological-index-first
+2. Check whether `get_corresponding_original_face`'s topological-index-first
    matching is reliable across the whole hull, or whether it's silently
    falling back to spatial matching more often than expected (both paths log
    distinctly via `debug_log("Face Mapping", ...)`).
