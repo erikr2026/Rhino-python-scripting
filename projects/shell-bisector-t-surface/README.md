@@ -9,24 +9,33 @@ character with a Python-2-only encoding-declaration error). Also **not** a
 Grasshopper component (this script gathers its own input with `rs.GetObject`;
 GH components get inputs injected as globals instead).
 
-**Status (2026-07-22): implementation written, not yet tested in real Rhino.**
-The geometry algorithm below was worked out, reviewed, and implemented in
-`shell_bisector_t_surface.py`. Expect several revisions once real-Rhino
-testing starts — see Testing plan below.
+**Status (2026-07-22): implementation written, in progress on real-Rhino
+testing.** The geometry algorithm below was worked out, reviewed, and
+implemented in `shell_bisector_t_surface.py`. First real-hull test run
+surfaced a real design issue (see Lessons in the project memory file):
+Stage 1 originally offset the *entire* multi-panel hull as one polysurface
+before picking the two panels it needed, which fails silently on complex
+real geometry. Fixed to explode the shell first and offset only the two
+selected panels individually — that's all anything downstream ever uses.
+Expect several more revisions once testing continues — see Testing plan
+below.
 
 ## What it does
 
-Takes a shell polysurface, offsets it, computes a "bisector surface" between two
-of the offset panels (the surface bisecting the dihedral angle along their shared
-seam), builds a T-shaped junction off that bisector, offsets the bisector both
-directions, intersects those offsets against the *original* (unoffset) shell, and
-lofts connecting surfaces between those intersection curves and the T's long edges.
+Takes a shell polysurface, explodes it, offsets the two selected panels
+individually (not the whole shell — offsetting an entire multi-panel hull at
+once is fragile on real geometry and unnecessary, since nothing downstream
+needs the other panels offset), computes a "bisector surface" between them
+(the surface bisecting the dihedral angle along their shared seam), builds a
+T-shaped junction off that bisector, offsets the bisector both directions,
+intersects those offsets against the *original* (unoffset) shell, and lofts
+connecting surfaces between those intersection curves and the T's long edges.
 
 ## Parameters
 
 ```python
-OFFSET_DISTANCE = 2.0              # distance to offset the shell
-BISECT_SURFACE_1_INDEX = 0         # index of first surface to bisect (within the offset shell)
+OFFSET_DISTANCE = 2.0              # distance to offset the two selected panels
+BISECT_SURFACE_1_INDEX = 0         # index of first surface to bisect (within the exploded original shell)
 BISECT_SURFACE_2_INDEX = 1         # index of second surface to bisect
 BISECTOR_DIRECTION = 1             # 1 outward, -1 inward
 BISECTOR_OFFSET_DISTANCE = 0.5     # offset the bisector surface both directions (thin sandwich)

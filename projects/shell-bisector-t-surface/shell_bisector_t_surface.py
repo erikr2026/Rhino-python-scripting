@@ -7,8 +7,9 @@ this runs Python 3 (CPython). Do NOT run via the RunPythonScript command;
 that invokes the legacy IronPython 2 engine instead, which this script no
 longer targets.
 
-Takes a shell polysurface, offsets it, computes a bisector surface between
-two offset panels, builds a T-shaped junction, intersects against the
+Takes a shell polysurface, offsets the two selected panels individually
+(not the whole shell - see Stage 1 comment for why), computes a bisector
+surface between them, builds a T-shaped junction, intersects against the
 original shell, and lofts connecting surfaces.
 
 API signatures live-verified against developer.rhino3d.com / mcneel/rhinoscriptsyntax
@@ -508,21 +509,38 @@ def main():
 
         rs.EnableRedraw(False)
 
-        # Stage 1: Offset shell
-        offset_layer = ensure_layer("ShellBisector::01_OffsetShell")
-        offset_surfaces = []
+        # Stage 1: Offset just the two selected panels, not the whole shell.
+        # Offsetting an entire multi-panel hull as one polysurface is fragile
+        # (self-intersection at concave/tight regions on real geometry) and
+        # unnecessary - everything downstream only ever uses these two
+        # panels plus the original (unoffset) shell.
+        offset_layer = ensure_layer("ShellBisector::01_OffsetPanels")
 
-        offset_id = rs.OffsetSurface(shell_id, OFFSET_DISTANCE, create_solid=False)
-        if not offset_id:
-            print("Failed to offset shell")
+        original_faces = rs.ExplodePolysurfaces(shell_id)
+        if not original_faces or len(original_faces) < 2:
+            print("Shell has fewer than 2 faces")
             return
 
-        rs.ObjectLayer(offset_id, offset_layer)
-        offset_faces = rs.ExplodePolysurfaces(offset_id)
+        surf1_orig_id = original_faces[BISECT_SURFACE_1_INDEX] if BISECT_SURFACE_1_INDEX < len(original_faces) else None
+        surf2_orig_id = original_faces[BISECT_SURFACE_2_INDEX] if BISECT_SURFACE_2_INDEX < len(original_faces) else None
+
+        if not surf1_orig_id or not surf2_orig_id:
+            print("Invalid surface indices")
+            return
+
+        surf1_id = rs.OffsetSurface(surf1_orig_id, OFFSET_DISTANCE, create_solid=False)
+        surf2_id = rs.OffsetSurface(surf2_orig_id, OFFSET_DISTANCE, create_solid=False)
+
+        if not surf1_id or not surf2_id:
+            print("Failed to offset selected panels (try a smaller OFFSET_DISTANCE)")
+            return
+
+        rs.ObjectLayer(surf1_id, offset_layer)
+        rs.ObjectLayer(surf2_id, offset_layer)
 
         if DEBUG:
             print("=== Stage 1: Offset ===")
-            print("Offset shell created with %d faces" % (len(offset_faces) if offset_faces else 1))
+            print("Offset panels created: yes")
 
         if STOP_AFTER_STAGE == "offset":
             return
@@ -530,17 +548,6 @@ def main():
         # Stage 2: Compute bisector surface
         if DEBUG:
             print("=== Stage 2: Bisector Surface ===")
-
-        if not offset_faces or len(offset_faces) < 2:
-            print("Offset shell has fewer than 2 faces")
-            return
-
-        surf1_id = offset_faces[BISECT_SURFACE_1_INDEX] if BISECT_SURFACE_1_INDEX < len(offset_faces) else None
-        surf2_id = offset_faces[BISECT_SURFACE_2_INDEX] if BISECT_SURFACE_2_INDEX < len(offset_faces) else None
-
-        if not surf1_id or not surf2_id:
-            print("Invalid surface indices")
-            return
 
         seam_curve = find_seam_curve(surf1_id, surf2_id)
         bisector_id = compute_bisector_surface(seam_curve, surf1_id, surf2_id)
