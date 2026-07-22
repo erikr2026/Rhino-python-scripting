@@ -350,22 +350,6 @@ def build_t_fin_surface(bisector_brep, primary_edge, dist1, dist2, samples, tole
     return None, None, None
 
 
-def intersect_with_shell(offset_bisector_brep, original_shell_brep, tolerance):
-    """Intersects offset bisector surface with the original shell."""
-    if not offset_bisector_brep or not original_shell_brep:
-        return []
-
-    res = rg.Intersect.Intersection.BrepBrep(offset_bisector_brep, original_shell_brep, tolerance)
-    if isinstance(res, tuple) and len(res) >= 2:
-        ok, curves = res[0], res[1]
-        if ok and curves:
-            crv_list = [c for c in curves if c is not None]
-            debug_log("Intersection", "Result", "Found {0} intersection curves".format(len(crv_list)))
-            return crv_list
-    debug_log("Intersection", "Result", "Found 0 intersection curves")
-    return []
-
-
 def loft_fin_to_shell(fin_edge, int_curves, tolerance):
     """Lofts a connecting surface between a T-fin edge and the matching shell intersection curve."""
     if not fin_edge or not int_curves:
