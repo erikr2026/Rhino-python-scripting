@@ -489,7 +489,12 @@ def loft_surfaces(t_edges, intersection_curves):
 # ============================================================================
 
 def main():
-    """Main workflow with undo wrapping."""
+    """
+    Main workflow with undo wrapping. Cleanup (EndUndoRecord, EnableRedraw)
+    lives in `finally` so it runs exactly once no matter which return/
+    exception path is taken - every early-return branch below can just
+    `return` and trust it happens.
+    """
 
     doc = Rhino.RhinoDoc.ActiveDoc
     undo_serial = doc.BeginUndoRecord("Shell Bisector T-Surface")
@@ -520,8 +525,6 @@ def main():
             print("Offset shell created with %d faces" % (len(offset_faces) if offset_faces else 1))
 
         if STOP_AFTER_STAGE == "offset":
-            doc.EndUndoRecord(undo_serial)
-            rs.EnableRedraw(True)
             return
 
         # Stage 2: Compute bisector surface
@@ -547,8 +550,6 @@ def main():
             return
 
         if STOP_AFTER_STAGE == "bisector":
-            doc.EndUndoRecord(undo_serial)
-            rs.EnableRedraw(True)
             return
 
         # Stage 3: Build T geometry
@@ -558,8 +559,6 @@ def main():
         t_brep_id, t_edges = build_t_geometry(bisector_id)
 
         if STOP_AFTER_STAGE == "t_geometry":
-            doc.EndUndoRecord(undo_serial)
-            rs.EnableRedraw(True)
             return
 
         # Stage 4: Offset bisector
@@ -573,8 +572,6 @@ def main():
             return
 
         if STOP_AFTER_STAGE == "bisector_offset":
-            doc.EndUndoRecord(undo_serial)
-            rs.EnableRedraw(True)
             return
 
         # Stage 5: Intersect
@@ -588,8 +585,6 @@ def main():
             return
 
         if STOP_AFTER_STAGE == "intersect":
-            doc.EndUndoRecord(undo_serial)
-            rs.EnableRedraw(True)
             return
 
         # Stage 6: Loft
@@ -615,13 +610,12 @@ def main():
             print("=== Complete ===")
             print("Outputs grouped in '%s'" % group_name)
 
-        doc.EndUndoRecord(undo_serial)
-        rs.EnableRedraw(True)
-
     except Exception as e:
         print("Error: %s" % str(e))
         import traceback
         traceback.print_exc()
+
+    finally:
         doc.EndUndoRecord(undo_serial)
         rs.EnableRedraw(True)
 
