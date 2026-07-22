@@ -28,6 +28,9 @@ wrong signatures - see the project's Lessons for the full story):
 - Brep.DuplicateNakedEdgeCurves(get_internal, get_boundary)
 - rs.UnitAbsoluteTolerance(tolerance=None, in_model_units=True) - returns doc
   tolerance directly in drawing units, no unit-system conversion needed
+- RhinoDoc.BeginUndoRecord(description) -> serial_number (uint), NOT
+  zero-arg; RhinoDoc.EndUndoRecord(serial_number) needs that same value
+  passed back in, also NOT zero-arg
 """
 
 import rhinoscriptsyntax as rs
@@ -489,7 +492,7 @@ def main():
     """Main workflow with undo wrapping."""
 
     doc = Rhino.RhinoDoc.ActiveDoc
-    doc.BeginUndoRecord()
+    undo_serial = doc.BeginUndoRecord("Shell Bisector T-Surface")
 
     try:
         # Get input shell
@@ -517,7 +520,7 @@ def main():
             print("Offset shell created with %d faces" % (len(offset_faces) if offset_faces else 1))
 
         if STOP_AFTER_STAGE == "offset":
-            doc.EndUndoRecord()
+            doc.EndUndoRecord(undo_serial)
             rs.EnableRedraw(True)
             return
 
@@ -544,7 +547,7 @@ def main():
             return
 
         if STOP_AFTER_STAGE == "bisector":
-            doc.EndUndoRecord()
+            doc.EndUndoRecord(undo_serial)
             rs.EnableRedraw(True)
             return
 
@@ -555,7 +558,7 @@ def main():
         t_brep_id, t_edges = build_t_geometry(bisector_id)
 
         if STOP_AFTER_STAGE == "t_geometry":
-            doc.EndUndoRecord()
+            doc.EndUndoRecord(undo_serial)
             rs.EnableRedraw(True)
             return
 
@@ -570,7 +573,7 @@ def main():
             return
 
         if STOP_AFTER_STAGE == "bisector_offset":
-            doc.EndUndoRecord()
+            doc.EndUndoRecord(undo_serial)
             rs.EnableRedraw(True)
             return
 
@@ -585,7 +588,7 @@ def main():
             return
 
         if STOP_AFTER_STAGE == "intersect":
-            doc.EndUndoRecord()
+            doc.EndUndoRecord(undo_serial)
             rs.EnableRedraw(True)
             return
 
@@ -612,14 +615,14 @@ def main():
             print("=== Complete ===")
             print("Outputs grouped in '%s'" % group_name)
 
-        doc.EndUndoRecord()
+        doc.EndUndoRecord(undo_serial)
         rs.EnableRedraw(True)
 
     except Exception as e:
         print("Error: %s" % str(e))
         import traceback
         traceback.print_exc()
-        doc.EndUndoRecord()
+        doc.EndUndoRecord(undo_serial)
         rs.EnableRedraw(True)
 
 if __name__ == "__main__":
