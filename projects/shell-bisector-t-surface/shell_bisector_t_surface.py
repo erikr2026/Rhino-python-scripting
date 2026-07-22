@@ -2,7 +2,11 @@
 """
 Shell Bisector T-Surface Generator
 
-Standalone Rhino Python script (run via RunPythonScript).
+Run via Rhino 8's ScriptEditor (type ScriptEditor, open this file, press F5) —
+this runs Python 3 (CPython). Do NOT run via the RunPythonScript command;
+that invokes the legacy IronPython 2 engine instead, which this script no
+longer targets.
+
 Takes a shell polysurface, offsets it, computes a bisector surface between
 two offset panels, builds a T-shaped junction, intersects against the
 original shell, and lofts connecting surfaces.

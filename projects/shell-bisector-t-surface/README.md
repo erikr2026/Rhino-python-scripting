@@ -1,14 +1,18 @@
 # shell-bisector-t-surface
 
 Standalone Rhino Python script (`rhinoscriptsyntax` + `RhinoCommon`, CPython 3 via
-Rhino 8's PythonNet bridge). Run via Rhino's `RunPythonScript` command — **not** a
-Grasshopper component (this script gathers its own input with `rs.GetObject`; GH
-components get inputs injected as globals instead).
+Rhino 8's PythonNet bridge). Run via Rhino 8's **ScriptEditor** command (type
+`ScriptEditor`, open this file, press F5) — **not** `RunPythonScript`, which
+invokes the legacy IronPython 2 engine instead and will fail on this script
+(confirmed 2026-07-22: `RunPythonScript` choked on a non-ASCII docstring
+character with a Python-2-only encoding-declaration error). Also **not** a
+Grasshopper component (this script gathers its own input with `rs.GetObject`;
+GH components get inputs injected as globals instead).
 
-**Status (2026-07-22): design complete, implementation not yet written.** The
-geometry algorithm below was worked out and reviewed; `shell_bisector_t_surface.py`
-still needs to be written from this design. This is expected to take several
-revisions once real-Rhino testing starts — see Testing plan below.
+**Status (2026-07-22): implementation written, not yet tested in real Rhino.**
+The geometry algorithm below was worked out, reviewed, and implemented in
+`shell_bisector_t_surface.py`. Expect several revisions once real-Rhino
+testing starts — see Testing plan below.
 
 ## What it does
 
