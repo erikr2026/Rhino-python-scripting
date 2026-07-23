@@ -17,31 +17,31 @@ averaged-normals bisector algorithm, `out`-parameter tuple handling, the
 multi-junction Esc-to-finish loop, and per-junction grouping) but drops the
 T-fin/loft/face-mapping parts of that pipeline — see Scope below.
 
-**Status (2026-07-23): written, not yet run against real Rhino geometry.**
-No Rhino install is available in this authoring environment — this has not
-been load-tested. See Testing plan below before relying on it.
+**Status (2026-07-23): corrected after a real Rhino run.** First draft had
+two issues the owner caught by actually running it — see "Fixed since
+first draft" below. Not re-tested in Rhino since the fix; see Testing plan.
 
 ## What it does
 
-1. Select the shell polysurface.
-2. Enter a reach/extent distance and an offset distance, once for the
-   whole run (applied to every junction below).
-3. Bakes the **original shell**, unmodified, once, to a reference layer.
-4. Loops over junctions: pick two faces directly off the shell via
-   sub-object (face) selection (`Rhino.Input.Custom.GetObject` with
-   `SubObjectSelect = True` — a plain `rs.GetObject` surface filter can't
-   pick individual faces off a joined polysurface), process that junction
-   fully, then prompt for the next pair. Cancel ("Esc") on a junction's
-   first-face prompt to stop — one script run can handle every seam that
-   needs a bisector, not just one.
-5. Per junction:
+1. Enter a reach/extent distance and an offset distance, once for the
+   whole run (applied to every junction below). No whole-shell selection —
+   this script only ever touches the two faces picked per junction.
+2. Loops over junctions: pick two faces via sub-object (face) selection
+   (`Rhino.Input.Custom.GetObject` with `SubObjectSelect = True` — a plain
+   `rs.GetObject` surface filter can't pick individual faces off a joined
+   polysurface), process that junction fully, then prompt for the next
+   pair. Cancel ("Esc") on a junction's first-face prompt to stop — one
+   script run can handle every seam that needs a bisector, not just one.
+3. Per junction:
    - computes the **bisector surface** between the two selected faces
      (shared seam curve, averaged face normals, projected outward by the
      reach distance, lofted);
    - offsets it both directions (+ and -) by the offset distance, producing
      two **offset surfaces**;
-   - intersects each offset surface against the **original shell** (see
-     Assumption flagged below), producing **intersection curves**;
+   - intersects each offset surface against **only the two faces this
+     junction's bisector was built from** (face1 and face2 — not the whole
+     shell, not the offsets against each other), producing **intersection
+     curves**;
    - groups all of that junction's baked outputs together so multiple
      junctions in one run stay distinguishable (see Grouping below).
 
@@ -52,16 +52,15 @@ index mapping-back to the original shell — see Scope below for why.
 
 | Layer | Color | Contents |
 |---|---|---|
-| `01_Original_Shell` | Gainsboro (light gray) | Unmodified reference copy of the input shell (baked once per run) |
-| `02_Bisector` | Yellow | Bisecting surface, one per junction |
-| `03_Offset_Pos` | Orange | Bisector offset by `+offset_distance`, one per junction |
-| `03_Offset_Neg` | Purple | Bisector offset by `-offset_distance`, one per junction |
-| `04_Intersections` | Red | Intersection curves, both offset surfaces vs. original shell, per junction |
+| `01_Bisector` | Yellow | Bisecting surface, one per junction |
+| `02_Offset_Pos` | Orange | Bisector offset by `+offset_distance`, one per junction |
+| `02_Offset_Neg` | Purple | Bisector offset by `-offset_distance`, one per junction |
+| `03_Intersections` | Red | Intersection curves, both offset surfaces vs. the junction's own two reference faces |
 
-Layers `02`–`04` are shared across all junctions in a run, same as the
-sibling project's convention — grouping (below), not separate layers, is
-what keeps different junctions' outputs distinguishable. Every stage
-prints a `debug_log(...)` line to the command history.
+Layers are shared across all junctions in a run, same as the sibling
+project's convention — grouping (below), not separate layers, is what
+keeps different junctions' outputs distinguishable. Every stage prints a
+`debug_log(...)` line to the command history.
 
 ## Grouping
 
@@ -74,23 +73,24 @@ not create one — so the group is created with `rs.AddGroup(name)` first;
 the sibling project's own README documents hitting this exact silent
 no-op bug before landing on that fix.
 
-## Assumption flagged for owner review (unconfirmed)
+## Fixed since first draft (2026-07-23, real-Rhino run)
 
-The request said to "intersect the offset surfaces" without specifying
-against what. This script intersects EACH of the two offset surfaces, per
-junction, against the ORIGINAL shell (unmodified input) — producing two
-separate curve sets per junction, both baked to `04_Intersections`. A
-clarifying question was asked this session and went unanswered before the
-script needed to ship, so this is a best-guess call per house convention
-("proceed with best judgment, flag for correction in review"), not a
-confirmed spec.
+The owner ran the first draft and caught two real problems:
 
-**Alternative reading, not implemented:** intersecting the two offset
-surfaces against EACH OTHER instead of against the original shell. If
-that's what was actually meant, the fix is small — inside `main()`'s
-junction loop, change the second `intersect_brep_with_shell(...)` argument
-from `shell_brep` to the other offset surface, e.g.
-`intersect_brep_with_shell(offset_pos, offset_neg, tol)`.
+1. **Duplicate shell surface.** The first draft baked an unmodified copy of
+   the whole input shell as a QA reference layer (`01_Original_Shell`).
+   The owner does not want that. Fixed by removing the whole-shell
+   selection/extraction/baking step entirely — this script no longer
+   touches anything but the two faces picked per junction.
+2. **Wrong intersection target.** The first draft intersected each offset
+   surface against the whole original shell — explicitly flagged at the
+   time as an unconfirmed guess (the source request only said "intersect
+   the offset surfaces" without saying against what). Owner corrected:
+   each offset surface must intersect **only** against the two faces the
+   bisector surface for that junction was built from. Fixed — `main()`'s
+   junction loop now cross-intersects both offset surfaces against both
+   reference faces (up to 4 curve sets per junction, 0 if none of the 4
+   pairs actually touch).
 
 ## Scope: multi-junction looping kept; T-fin/loft/face-mapping still dropped
 
@@ -98,9 +98,8 @@ Per explicit correction from the owner (relayed mid-task, after an initial
 single-junction draft), this script loops over as many face-pair junctions
 as needed in one run — same Esc-to-finish pattern as
 `shell_bisector_t_surface.py`'s Step 4 — rather than handling only one
-junction per run. The original shell reference is baked once before the
-loop starts (it doesn't change per junction); reach and offset distances
-are also prompted once and applied to every junction in the run.
+junction per run. Reach and offset distances are prompted once and applied
+to every junction in the run.
 
 Still dropped, unchanged from the original leaner-scope request: T-fin
 construction, the final connecting loft, and per-face topological-index
@@ -123,8 +122,9 @@ project rather than rebuilding it from scratch.
 3. Confirm the reach/extent distance and offset distance defaults (5.0,
    0.5) against real fabrication tolerances — both are development
    placeholders, not verified against an actual part.
-4. Confirm the "intersect against original shell" assumption above with the
-   owner; swap to the "against each other" reading if that's what was meant.
+4. Confirm the corrected intersection behavior actually produces the
+   expected reference/cut lines against the two selected faces — not yet
+   re-tested in Rhino since the fix.
 5. Verify the "same face picked twice" guard actually stops a bad pick
    before it reaches `compute_bisector_surface` (rather than relying on
    that function's own "no shared seam edge" failure path), and that the

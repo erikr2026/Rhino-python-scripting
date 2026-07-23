@@ -2,13 +2,13 @@
 shell_bisector_lines.py
 
 Leaner, standalone companion to shell_bisector_t_surface.py (same repo,
-projects/shell-bisector-t-surface/): select a shell, then loop over as
-many face-pair junctions as needed in one run (same Esc-to-finish pattern
-as that script's Step 4), building a bisecting surface between each pair,
-offsetting it both directions by a shared offset distance, and
-intersecting each offset against the original shell to produce reference/
-cut lines. Each junction's outputs are grouped separately so multiple
-junctions in one run stay distinguishable.
+projects/shell-bisector-t-surface/): loop over as many face-pair junctions
+as needed in one run (same Esc-to-finish pattern as that script's Step 4),
+building a bisecting surface between each pair, offsetting it both
+directions by a shared offset distance, and intersecting each offset
+surface against the two faces the bisector was built from (nothing else).
+Each junction's outputs are grouped separately so multiple junctions in
+one run stay distinguishable.
 
 Still out of scope, unlike the full pipeline script: no T-fin
 construction, no final connecting loft, no per-face topological-index
@@ -26,25 +26,18 @@ Also not a Grasshopper component - this script gathers its own input via
 interactive command-line prompts (rs.GetObject / rs.GetReal), it does not
 expect GH-injected globals.
 
-ASSUMPTION FLAGGED FOR OWNER REVIEW - NOT CONFIRMED:
-Step 5d below intersects EACH of the two offset surfaces, per junction,
-against the ORIGINAL, unmodified shell - not against each other. The
-source request said only "intersect the offset surfaces" without saying
-against what; a clarifying question went unanswered this session, so this
-is a best-guess implementation, not a confirmed spec. If the owner
-actually meant the two offset surfaces intersected against EACH OTHER
-instead, that's a small change: call
-intersect_brep_with_shell(offset_pos, offset_neg, tol) instead of passing
-shell_brep as the second argument (see main(), inside the junction loop).
-
-No RhinoCommon/rhinoscriptsyntax signature in this file was freshly
-verified via live docs or a console help() call this session. Every call
-touching a non-trivial C# signature (Brep.CreateOffsetBrep,
-Intersection.BrepBrep, Brep.CreateFromLoft, Brep.JoinBreps) is reused
-verbatim or near-verbatim from shell_bisector_t_surface.py, which the
-owner confirmed running successfully end-to-end on the real hull on
-2026-07-22 - that prior confirmation is the basis for trusting these calls
-here, not a fresh verification pass this session.
+CORRECTED 2026-07-23 (real-Rhino run, owner feedback) - two fixes from the
+first draft, both now confirmed, not guesses:
+1. The first draft baked a duplicate copy of the whole original shell as
+   a QA reference. The owner does not want that - removed entirely. This
+   script no longer selects, extracts, or bakes the whole shell at all;
+   it only ever touches the two faces picked per junction.
+2. The first draft intersected each offset surface against the whole
+   original shell - flagged at the time as an unconfirmed guess. Owner
+   corrected: each offset surface must intersect ONLY against the two
+   faces the bisector surface for that junction was built from (face1 and
+   face2 from that junction's picks) - not the whole shell, not the two
+   offsets against each other.
 """
 
 import System
@@ -64,23 +57,6 @@ def debug_log(step_name, status, details=""):
     if details:
         msg += " | {0}".format(details)
     print(msg)
-
-
-def extract_brep(obj_id):
-    """Converts a Rhino document object GUID into a standalone Brep geometry."""
-    if not obj_id:
-        return None
-
-    rhino_obj = sc.doc.Objects.FindId(obj_id)
-    if not rhino_obj:
-        return None
-
-    geom = rhino_obj.Geometry
-    if isinstance(geom, rg.Brep):
-        return geom.DuplicateBrep()
-    elif isinstance(geom, rg.Surface):
-        return geom.ToBrep()
-    return None
 
 
 def get_surface_subobject(prompt):
@@ -243,25 +219,22 @@ def offset_brep(source_brep, distance, tolerance):
     return None
 
 
-def intersect_brep_with_shell(offset_brep_geom, target_brep, tolerance):
-    """Intersects one offset surface against target_brep and returns any
-    resulting intersection curves.
+def intersect_breps(brep_a, brep_b, tolerance):
+    """Intersects two breps and returns any resulting intersection curves.
 
     Intersection.BrepBrep returns a 3-tuple (bool success, Curve[] curves,
     Point3d[] points) under PythonNet - confirmed via this repo's prior
     debugging history (shell-bisector-t-surface project), not re-verified
     live this session.
     """
-    if not offset_brep_geom or not target_brep:
+    if not brep_a or not brep_b:
         return []
 
-    ok, curves, points = Intersection.BrepBrep(offset_brep_geom, target_brep, tolerance)
+    ok, curves, points = Intersection.BrepBrep(brep_a, brep_b, tolerance)
     if not ok or not curves:
         return []
 
-    result = [c for c in curves if c is not None]
-    debug_log("Intersection", "Result", "{0} curve(s) found".format(len(result)))
-    return result
+    return [c for c in curves if c is not None]
 
 
 def get_or_create_layer(layer_name, color):
@@ -302,41 +275,20 @@ def main():
     print("RHINO SHELL BISECTOR LINES TOOL")
     print("==========================================")
 
-    # Step 1: Select the shell polysurface.
-    shell_id = rs.GetObject("Select the shell polysurface", rs.filter.surface | rs.filter.polysurface)
-    if not shell_id:
-        debug_log("Step 1", "ABORTED", "No shell selected")
-        return
-
-    shell_brep = extract_brep(shell_id)
-    if not shell_brep or not shell_brep.IsValid:
-        debug_log("Step 1", "FAILED", "Selected object is not a valid surface/polysurface")
-        return
-    debug_log("Step 1", "Shell Loaded", "GUID: {0}".format(shell_id))
-
-    # Step 2: Reach/extent distance and offset distance - once for the
-    # whole run, applied to every junction.
+    # Step 1: Reach/extent distance and offset distance - once for the
+    # whole run, applied to every junction. No whole-shell selection here -
+    # this script only ever touches the faces picked per junction below.
     reach_distance = rs.GetReal("Enter bisector reach/extent distance", 5.0, 0.001, 1000.0)
     if reach_distance is None:
-        debug_log("Step 2", "ABORTED", "Reach distance entry canceled")
+        debug_log("Step 1", "ABORTED", "Reach distance entry canceled")
         return
 
     offset_distance = rs.GetReal("Enter offset distance (applied both +/- from the bisector)", 0.5, 0.001, 1000.0)
     if offset_distance is None:
-        debug_log("Step 2", "ABORTED", "Offset distance entry canceled")
+        debug_log("Step 1", "ABORTED", "Offset distance entry canceled")
         return
 
-    # Step 3: bake the original shell once, unmodified, as a QA reference
-    # copy - it doesn't change per junction.
-    undo_shell = doc.BeginUndoRecord("Shell Bisector Lines - Original Shell Reference")
-    try:
-        bake_item(shell_brep.DuplicateBrep(), "01_Original_Shell", System.Drawing.Color.Gainsboro)
-        debug_log("Step 3", "Original Shell Baked", "Reference copy on layer 01_Original_Shell")
-    finally:
-        doc.Views.Redraw()
-        doc.EndUndoRecord(undo_shell)
-
-    # Step 4: loop over as many junctions as needed. Cancel ("Esc") on the
+    # Step 2: loop over as many junctions as needed. Cancel ("Esc") on the
     # FIRST-face prompt of a pair stops the run - reused directly from
     # shell_bisector_t_surface.py's Step 4 loop.
     junction_count = 0
@@ -349,12 +301,12 @@ def main():
             "Select FIRST face for junction {0} (Esc when finished with all junctions)".format(attempt_num)
         )
         if not face1_brep:
-            debug_log("Step 4", "DONE", "No more junctions selected")
+            debug_log("Step 2", "DONE", "No more junctions selected")
             break
 
         face2_brep, idx2 = get_surface_subobject("Select SECOND face for junction {0}".format(attempt_num))
         if not face2_brep:
-            debug_log("Step 4", "ABORTED", "Second face selection canceled for junction {0}".format(attempt_num))
+            debug_log("Step 2", "ABORTED", "Second face selection canceled for junction {0}".format(attempt_num))
             break
 
         if idx1 is not None and idx2 is not None and idx1 == idx2:
@@ -370,52 +322,66 @@ def main():
         result_ids = []
 
         try:
-            # 4a: compute + bake the bisector surface for this junction.
+            # 2a: compute + bake the bisector surface for this junction.
             bisector_brep = compute_bisector_surface(face1_brep, face2_brep, reach_distance, SAMPLES, tol)
             if not bisector_brep:
                 debug_log("Junction {0}".format(junction_count), "FAILED", "Could not compute bisector surface - skipping junction")
             else:
-                bis_id = bake_item(bisector_brep, "02_Bisector", System.Drawing.Color.Yellow)
+                bis_id = bake_item(bisector_brep, "01_Bisector", System.Drawing.Color.Yellow)
                 if bis_id != System.Guid.Empty:
                     result_ids.append(bis_id)
 
-                # 4b: offset the bisector both directions and bake each.
+                # 2b: offset the bisector both directions and bake each.
                 offset_pos = offset_brep(bisector_brep, offset_distance, tol)
                 offset_neg = offset_brep(bisector_brep, -offset_distance, tol)
 
                 if offset_pos:
-                    id_p = bake_item(offset_pos, "03_Offset_Pos", System.Drawing.Color.Orange)
+                    id_p = bake_item(offset_pos, "02_Offset_Pos", System.Drawing.Color.Orange)
                     if id_p != System.Guid.Empty:
                         result_ids.append(id_p)
                 else:
-                    debug_log("Junction {0}".format(junction_count), "WARNING", "Positive offset failed - skipping its intersection")
+                    debug_log("Junction {0}".format(junction_count), "WARNING", "Positive offset failed - skipping its intersections")
 
                 if offset_neg:
-                    id_n = bake_item(offset_neg, "03_Offset_Neg", System.Drawing.Color.Purple)
+                    id_n = bake_item(offset_neg, "02_Offset_Neg", System.Drawing.Color.Purple)
                     if id_n != System.Guid.Empty:
                         result_ids.append(id_n)
                 else:
-                    debug_log("Junction {0}".format(junction_count), "WARNING", "Negative offset failed - skipping its intersection")
+                    debug_log("Junction {0}".format(junction_count), "WARNING", "Negative offset failed - skipping its intersections")
 
-                # 4c: intersect each offset surface against the ORIGINAL
-                # shell. See the module docstring / README for why this is
-                # flagged as an unconfirmed assumption, and how to swap to
-                # the other reading (offsets against each other instead).
-                curves_pos = intersect_brep_with_shell(offset_pos, shell_brep, tol) if offset_pos else []
-                curves_neg = intersect_brep_with_shell(offset_neg, shell_brep, tol) if offset_neg else []
+                # 2c: intersect each offset surface against ONLY the two
+                # faces this junction's bisector was built from - face1 and
+                # face2 - not the whole shell, not the offsets against each
+                # other. Confirmed by the owner 2026-07-23 (see docstring).
+                offset_variants = [("Offset_Pos", offset_pos), ("Offset_Neg", offset_neg)]
+                ref_faces = [("Face1", face1_brep), ("Face2", face2_brep)]
 
-                for c in curves_pos + curves_neg:
-                    cid = bake_item(c, "04_Intersections", System.Drawing.Color.Red)
+                curves_all = []
+                for offset_label, offset_geom in offset_variants:
+                    if not offset_geom:
+                        continue
+                    for face_label, ref_brep in ref_faces:
+                        found = intersect_breps(offset_geom, ref_brep, tol)
+                        if found:
+                            debug_log(
+                                "Junction {0}".format(junction_count),
+                                "Intersection",
+                                "{0} vs {1}: {2} curve(s)".format(offset_label, face_label, len(found)),
+                            )
+                        curves_all.extend(found)
+
+                for c in curves_all:
+                    cid = bake_item(c, "03_Intersections", System.Drawing.Color.Red)
                     if cid != System.Guid.Empty:
                         result_ids.append(cid)
 
                 debug_log(
                     "Junction {0}".format(junction_count),
                     "COMPLETE",
-                    "{0} positive + {1} negative intersection curve(s) baked".format(len(curves_pos), len(curves_neg)),
+                    "{0} intersection curve(s) baked".format(len(curves_all)),
                 )
 
-            # 4d: group this junction's outputs so multiple junctions in
+            # 2d: group this junction's outputs so multiple junctions in
             # one run stay visually distinguishable. AddObjectsToGroup only
             # adds to an EXISTING group - it does not create one - so the
             # group must be created first (per shell_bisector_t_surface.py's
@@ -433,7 +399,7 @@ def main():
             doc.EndUndoRecord(undo_rec)
 
     print("\n==========================================")
-    debug_log("Execution", "COMPLETE", "Processed {0} junction(s). Check baked layers 01 through 04.".format(junction_count))
+    debug_log("Execution", "COMPLETE", "Processed {0} junction(s). Check baked layers 01 through 03.".format(junction_count))
     print("==========================================")
 
 
