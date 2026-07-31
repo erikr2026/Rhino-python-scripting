@@ -1,0 +1,5 @@
+PlanarizeCurve Script aliases-
+
+Drag and drop the rvb file over an open Rhino window to register these aliases:
+
+PlanarizeCurve- sets a nonplanar curve to be planar- results depend on settings- the end points can be fixed or not, either an atomatically calculated plane(Best fit) or vertical plane.

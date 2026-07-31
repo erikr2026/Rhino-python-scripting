@@ -1,0 +1,67 @@
+Option Explicit
+
+'Script written by Pascal
+
+'Saturday, July 26, 2008
+
+'finds the local high point and low point
+'on a surface or brep starting from
+'an initial point set by the user
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "HighPt", "_NoEcho _-RunScript (HighPt)"
+Rhino.AddAlias "LowPt", "_NoEcho _-RunScript (LowPt)"
+
+Sub HighPt
+	MaxPt(0)
+End Sub
+
+Sub LowPt
+	MaxPt(1)
+End Sub
+
+Sub MaxPt(dir)
+	
+	Dim sobj: sObj = Rhino.GetObject("Select a surface or polysurface to test",8+16,True)
+	If IsNull(sObj) Then Exit Sub
+	
+	Dim aBB: aBB = Rhino.BoundingBox(sObj,Rhino.CurrentView)
+	
+	Dim Apt: aPt = Rhino.GetPointOnSurface(sObj)
+	If Not IsArray(aPt) Then Exit Sub
+	
+	Dim VecDir, BasePt
+	
+	If Dir = 0 Then
+		BasePt = aBB(4)
+		VecDir = Rhino.VectorCreate(aBB(4), aBB(0))
+	Else
+		VecDir = Rhino.VectorCreate(aBB(0), aBB(4))
+		BasePt = aBB(0)
+	End If
+		
+	Dim PlaneOrigin: PlaneOrigin = Rhino.PointAdd(BasePt, Rhino.VectorScale(VecDir,.05))
+	Dim Plane: Plane = Rhino.ViewCPlane(Rhino.CurrentView)
+	Plane(0) = PlaneOrigin
+
+	Dim Temp, i, aTemp
+	Dim max: max = 512
+	
+	Rhino.EnableRedraw(False)
+	
+	Do
+		Temp = Rhino.PlaneClosestPoint (Plane,aPt)
+		aTemp = Rhino.BrepClosestPoint(sObj,Temp)
+		aPt = aTemp(0)
+		i = i +1
+		
+		If i = Max Then
+			Rhino.AddPoint aPt
+		End If
+		
+	Loop Until i = Max
+	
+	Rhino.EnableRedraw
+	
+End Sub
+

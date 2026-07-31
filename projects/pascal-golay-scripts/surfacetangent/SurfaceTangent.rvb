@@ -1,0 +1,291 @@
+﻿Option Explicit
+'Script written by <insert name>
+'Script copyrighted by <insert company name>
+'Script version Friday, September 10, 2010
+
+
+Rhino.AddStartupScript Rhino.LastLoadedScriptFile
+
+Rhino.AddAlias "TangentDirectionSrf","_-Runscript (TangentDirectionSrf)"
+'sets a tangent direction for an untrimmed surface edge and adjusts the surface points to match.
+
+Rhino.AddAlias "TangentTensionSrf","_-Runscript (TangentTensionSrf)"
+'adjusts a surface's tangent points along an edge accoring to user input to set an absolute
+'tangent point distance or move the tangent points proportinally
+
+Private OldAdjStyle
+If isEmpty(OldAdjStyle) Then
+	OldAdjStyle = "Absolute"
+End If
+
+'Call TangentDirectionSrf()
+'Call TangentTensionSrf()
+
+Sub TangentDirectionSrf()
+	
+	Dim CrntPlane: CrntPlane = Rhino.ViewCPlane()
+	Dim XYPLane: XYPlane = Rhino.WorldXYPlane()
+	Dim vecDir
+	
+	'Select the surface at the edge
+	Dim aSrf: aSrf = Rhino.GetSurfaceObject("Select untrimmed surface on the edge to adjust",False)
+	
+	If Not isArray(aSrf) then Exit Sub
+	
+	Dim sSrf: sSrf = aSrf(0)'The surface ID
+	Dim aParam: aParam = aSrf(4) ' the surface parameter at pick point
+
+	
+	'Get a tangent direction from the user
+	Dim aDir: aDir = Rhino.GetPoints(True,False,"Tangent direction base point","Tangent direction point",2)
+	If not isArray(aDir) then exit sub
+	
+	'Get a direction vector from the point picked
+	VecDir = Rhino.VectorUnitize(Rhino.VectorCreate(aDir(0),aDir(1)))
+
+	'find which edge was selected- Umin=0, Umax=1, VMin=2, VMax=3
+	Dim intEdge: intEdge = SurfaceEdge(sSrf, aParam)
+	
+	'find the indices of the points along the selected edge, and one row in
+	Dim apts: aPts = SurfaceTangentPoints (sSrf,intEdge)
+	
+	
+	Rhino.EnableRedraw(False)
+	
+	dim BlnOn: BlnOn = true
+	If not Rhino.ObjectGripsOn (sSrf) then
+		BlnOn = False
+		Rhino.EnableObjectGrips sSrf
+	End If
+	
+	
+	dim tanPt,  Pospt,Dist, i
+	
+	'adjust each tangent point location to be in lline with the users directon
+	'vector from its corresponding edge point
+	
+	For i = 0 to ubound(aPts(1))
+		
+		TanPt = Rhino.ObjectGripLocation(sSrf,aPts(1)(i))
+		PosPt = Rhino.ObjectGripLocation(sSrf,aPts(0)(i))
+		Dist = Rhino.Distance (tanPt,PosPt)
+		Rhino.ObjectGripLocation sSrf,aPts(1)(i),Rhino.PointAdd(PosPt,Rhino.VectorScale(VecDir,Dist))
+	Next
+	
+	If BlnOn = False then Rhino.EnableObjectGrips sSrf, false
+	
+	Rhino.Enableredraw(True)
+
+End Sub
+
+Sub TangentTensionSrf()
+
+	Dim aSrf: aSrf = Rhino.GetSurfaceObject("Select untrimmed surface near edge To change",False)
+	
+	If Not isArray(aSrf) Then Exit Sub
+	
+	Dim sSrf: sSrf = aSrf(0)
+	Dim aParam: aParam = aSrf(4)
+		
+	Dim intEdge: intEdge = SurfaceEdge(sSrf, aParam)
+	Dim aPts: aPts = SurfaceTangentPoints (sSrf,intEdge)
+	
+	If Not isArray(aPts) Then Exit Sub
+	Dim aStyle: aStyle = Array("Absolute","Proportional")
+	Dim sStyle : sStyle = Rhino.GetString("Tension adjustment style", OldAdjStyle, aStyle)
+	
+	Dim blnAbs: blnAbs = False
+	
+	If lcase(sStyle) = "absolute" Then 
+		blnAbs = True
+		OldAdjStyle = "Absolute"
+	ElseIf lcase(sStyle) = "proportional" Then 
+		OldAdjStyle = "Proportional"
+	Else Exit Sub
+	End If
+	
+	Rhino.EnableRedraw(False)
+	
+	Dim BlnOn: BlnOn = True
+	If Not Rhino.ObjectGripsOn (sSrf) Then
+		BlnOn = False
+		Rhino.EnableObjectGrips sSrf
+	End If
+	
+	Dim i,aDummy
+
+	Dim Bound: Bound = UBound(aPts(0))
+	redim aDummy(bound)
+	For i = 0 To Bound
+		Rhino.SelectObjectGrip sSrf, aPts(1)(i)
+		aDummy(i) = Rhino.AddPoint (Rhino.ObjectGripLocation(sSrf, aPts(0)(i)))
+	Next
+	
+	Rhino.Command "_InvertPt"
+	Rhino.Command"_HidePt"
+	
+	Rhino.EnableRedraw(True)
+	
+	Dim aDir: aDir = Rhino.GetObjectGrip("Select a control point",,True)
+	If Not isArray(aDir) Then Exit Sub
+	
+	'	Rhino.EnableRedraw(False)
+	
+	Dim aBase, X'the edge point corresponding To the tangent point
+	
+	For i = 0 To Bound
+		If aDir(1) = aPts(1)(i) Then
+			aBase = aPts(0)(i)
+			x = i
+			Exit For
+		End If
+	Next
+
+	
+	Dim LocEdge: LocEdge = Rhino.ObjectGripLocation(sSrf,aBase)
+	Dim LocTan:	LocTan = Rhino.ObjectGripLocation(sSrf,aDir(1))
+	Dim Dist: Dist = Rhino.Distance (LocEdge,LocTan)
+	
+	Rhino.Command "_Move W" & Rhino.Pt2Str(LocTan,,True) &"_alongLine W" & Rhino.Pt2Str(LocTan,,True) & "W" & Rhino.Pt2Str(LocEdge,,True)
+	
+	If Not Rhino.LastCommandResult() = 0 Then Exit Sub
+	
+	Rhino.EnableRedraw(False)
+	
+	Dim Dist2: Dist2 = Rhino.Distance(LocEdge, Rhino.ObjectGripLocation(sSrf, aDir(1)))
+	
+	Dim DblProp: dblProp = Dist2/Dist
+	
+	Dim VecDir, tempScale, tempDist
+	
+	For i = 0 To Bound
+		
+		If i<>X Then
+	
+			LocEdge = Rhino.ObjectGripLocation(sSrf,aPts(0)(i))
+			LocTan = Rhino.ObjectGripLocation(sSrf,aPts(1)(i))
+			tempDist = Rhino.Distance (LocEdge,LocTan)
+			tempScale = tempDist*dblProp
+			If BlnAbs = True Then	tempScale = Dist2
+			VecDir = Rhino.VectorScale( Rhino.VectorUnitize(Rhino.vectorCreate(LocTan,LocEdge)),tempScale)
+			Rhino.ObjectGripLocation sSrf, aPts(1)(i), Rhino.PointAdd(Rhino.ObjectGripLocation(sSrf, aPts(0)(i)),VecDir)
+			
+		End If
+	Next
+	Rhino.DeleteObjects aDummy
+	Rhino.Command "_ShowPt"
+	'If BlnOn = False Then Rhino.EnableObjectGrips sSrf, False
+	Rhino.EnableRedraw(True)
+	
+End Sub
+
+Function SurfaceTangentPoints(sSrf,intEdge)
+	
+	Dim aCnt: aCnt = Rhino.SurfacePointCount(sSrf)
+	Dim Vint: Vint = aCnt(0)
+	Dim UInt: UInt = aCnt(1)
+	
+	Dim rangePos, rangeTan
+	
+	Dim Count: Count = VInt-1
+	If intEdge < 2  Then Count = UInt-1
+	
+	redim RangePos(Count)
+	redim RangeTan(Count)
+	
+	Dim i
+	Select Case intEdge
+		case 0
+			For i = 0 To Count
+				rangePos(i) = i
+				Rangetan(i) = i + count +1
+			Next
+		
+		Case 1
+			For i = 0 To Count
+				rangePos(i) = ((Vint*Uint)-UInt) + i
+				rangeTan(i) = ((Vint*Uint)-(2*Uint)) + i
+			Next
+		
+		Case 2
+			For i = 0 To Count
+				rangePos(i) = (i*uint) 
+				rangeTan(i) = (i*uint) + 1
+			Next
+		
+		Case 3
+			For i = 0 To Count
+				rangePos(i) = (Uint)+ (i*Uint-1)
+				rangeTan(i) = (Uint-1) + (I* uint -1)
+			Next
+		
+	End Select
+	
+	SurfaceTangentPoints = array(RangePos, rangeTan)
+	
+End Function
+
+Function SurfaceEdge(sSrf, aParam)
+
+	Dim aDomU: aDomU = Rhino.SurfaceDomain(sSrf,0)
+	Dim aDomV:	aDomV = Rhino.SurfaceDomain(sSrf,1)
+	
+	'if the pick is on an edge, then return that
+	'edge and then bail
+	If aparam(0) = aDomU(0) Then
+		SurfaceEdge = 0
+		Exit Function
+	elseif aParam(0) = aDomU(1) Then
+		SurfaceEdge = 1
+		Exit Function
+	elseIf aparam(1) = aDomV(0) Then
+		SurfaceEdge = 2
+		Exit Function
+	Elseif aParam(1) = aDomV(1) Then
+		SurfaceEdge = 3
+		Exit Function
+	End If
+		
+	'If the pick is not on an edge, figure out the nearest edge and return that.
+	'not working right...
+	Dim UProp: UProp = (aDomU(1) - aparam(0))/(aDomU(1)-aDomU(0))
+	Dim VProp: VProp = (aDomV(1) - aparam(1))/(aDomV(1)-aDomV(0))
+	
+	Dim UDist,VDist
+	
+	If UProp<=.5 Then 
+		uDist = UProp 
+	Else
+		UDist = -1*(1-UProp)
+	End If
+	
+	If VProp<=.5 Then 
+		VDist = VProp 
+	Else
+		VDist = -1*(1-VProp)
+	End If
+	
+	
+	
+	If abs(UDist) < abs(Vdist) Then
+		If UDist <= .5 Then
+			SurfaceEdge = 0
+			Exit Function
+		Else
+			SurfaceEdge = 1
+			Exit Function
+		end If
+	Else
+	
+		If VDist <= .5 Then 
+			SurfaceEdge= 2
+			Exit Function
+		Else
+			SurfaceEdge = 3
+			Exit Function
+	
+		End If
+	End If
+	
+
+End function

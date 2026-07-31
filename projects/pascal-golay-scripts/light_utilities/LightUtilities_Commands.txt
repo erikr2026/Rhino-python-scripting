@@ -1,0 +1,58 @@
+Light Utilites commands-
+
+
+*AreaLightPlace*- places a rectangular light with a target point and a source location. Default size is 10 by 10 units but you can enter anything you like (always square) and change the size later using ''AreaLightResize''.
+
+*AreaLightResize*
+- Selelct the edge points on a rectangular light to resize the light from the center.
+
+*AreaLightOrient*
+- If there is no target point set, you will be asked to set one.
+- Selelct the center point of a rectangular light
+- Selelct an edge point to swivel the light on its axis (center to target point)
+- Selelct the target point of the light to wobble it around the center of the rectangle
+
+*AreaLightSlide*
+- Selelct edge points to slide it in the plane of the light.
+- Selelct the middle point of the light plane to slide it in and out from the target point on its axis.
+- Select the target point to move the entire light and target along the light axis.
+
+*AreaLightTarget*
+-Aligns  one or more area lights to point at a user defined location.
+
+*AreaLightTargetToObjects*
+- Aligns one or more area lights to point at the center of one or more objects' bounding box centroid.
+
+*AreaLightLevel*
+- Levels the top and bottom edges of selected rectngular lights.
+
+*LightToPlane*
+-Converts an rectangular light into a plane.
+
+*PlaneToLight*
+-Converts a plane to an rectangular light.
+
+AreaLightScale - scales an area light by a factor
+
+____________
+____________
+
+
+*SpotlightAngle*
+- sets the cone angle of one or more spotlights numerically
+
+*SpotlightPivot*
+- Wobble a spotlight around on its target point without changing the length of the light. The light source location is constrained to a sphere.
+
+*SpotlightSlide*
+- Slide a light in and out along its axis.
+
+*SpotlightTarget*
+- Aligns  one or more spotlights to point at a user defined location.
+
+*SpotlightTargetObjects*
+- Aligns one or more spotlights to point at the center of one or more objects' bounding box centroid.
+
+!!Comments
+----
+This version works with Rhino 4.0 SR1 and later. It no longer adds permanaent points to the rectangular light. All commands work on any rectangular light, it no longer requires that lights be created using the plug-in.

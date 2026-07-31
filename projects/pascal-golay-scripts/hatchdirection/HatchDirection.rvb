@@ -1,0 +1,98 @@
+Option Explicit
+'Script written by Pascal
+' RMA
+'Script version Friday, March 01, 2013
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "HatchDirection", "_NoEcho _-Runscript (HatchDirection)"
+Rhino.AddAlias "HatchOrient", "_NoEcho _-Runscript (HatchOrient)"
+
+'Call HatchDirection()
+
+Sub HatchDirection()
+	
+	SetHatch False
+	
+End Sub
+
+Sub HatchOrient()
+	
+	SetHatch True
+	
+End Sub
+
+Sub SetHatch(BlnBase)
+	
+	Dim aHatch: aHatch = Rhino.GetObjects("Select hatches to modify.", 65536,, True, True)
+	If Not isarray(aHatch) Then Exit Sub 
+	Dim shatch
+	
+	Dim sInput: sInput = "First direction point."
+	If blnBase Then sInput = "Set base point for selected hatches."
+	
+	Dim aBase: aBase = Rhino.GetPoints(True, True, sInput, "Set hatch direction", 2)
+	If Not isArray(aBase) Then Exit Sub
+	If UBound(aBase) <> 1 Then Exit Sub
+
+	Dim p1, p2
+	
+	If Not PlaneCompare(Rhino.ViewCPlane(), Rhino.WorldXYPlane()) Then
+			
+		p1 = Rhino.XformWorldToCPlane(aBase(0), Rhino.ViewCPlane())
+		p2 = Rhino.XformWorldToCPlane(aBase(1), Rhino.ViewCPlane())
+		
+	Else
+		p1 = aBase(0)
+		p2 = aBase(1)
+		
+	End If
+
+	Dim Angle: Angle = Rhino.Angle(p1, p2)(0)
+
+	Rhino.EnableRedraw False
+
+	Dim n: n = 0
+	For Each sHatch In aHatch
+		If BlnBase = True Then SetHatchBase sHatch, P1
+				If Rhino.HatchPattern(sHatch) <> "Solid" Then
+			Rhino.HatchRotation sHatch, Angle
+			n = n + 1
+		End If
+		
+	Next
+	
+	Rhino.SelectObjects aHatch
+	Rhino.EnableRedraw True
+	
+	Dim str: str = n & " Hatches set to " & round(Angle, 3) & " degrees." 
+	If n = 0 Then str = "No hatches were changed."
+	If n = 1 Then str = " 1 Hatch set to " & round(Angle, 3) & " degrees." 
+	
+	Rhino.Print  str  
+	
+End Sub
+
+Sub SetHatchBase(sHatch, aPt)
+	
+	
+	Rhino.UnselectAllObjects()
+	Rhino.SelectObject sHatch
+	Rhino.Command "_HatchBase " & Rhino.Pt2Str(aPt,, True)
+	
+	
+End Sub
+
+Function PlaneCompare(Plane1, Plane2)
+	
+	PlaneCompare = False
+
+	If Rhino.PointCompare(Plane1(0), Plane2(0)) Then
+		If Rhino.PointCompare(Plane1(1), Plane2(1)) Then
+			If	Rhino.PointCompare(Plane1(2), Plane2(2)) Then
+				PlaneCompare = True
+			End If 
+		End If
+	End If
+	
+	
+End Function

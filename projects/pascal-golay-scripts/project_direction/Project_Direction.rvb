@@ -1,0 +1,117 @@
+Option Explicit
+
+'Allows the user to project curves onto target objects
+'using a user defined directions instead of the CPlane normal
+
+Rhino.AddStartupScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "ProjectDir", "! _NoEcho _-Runscript ProjectDir"
+Rhino.AddAlias "ProjectView", "! _NoEcho _-Runscript ProjectView"
+Rhino.AddAlias "TrimFromView", "! _NoEcho _-Runscript TrimFromView"
+
+'Call TrimFromView()
+'call ProjectDir()
+
+Sub ProjectDir()
+	Project(0)
+End Sub
+
+sub ProjectView()
+	Project(1)
+End Sub
+
+Sub Project(pdir)
+	
+	Dim strDir, arrPts, arrProj, arrTarget, strObject, CrntPLane, View, arrSel
+	Dim A 
+	A = True
+	
+	StrDir = vbNull
+	crntPLane = Rhino.ViewCplane
+	view = Rhino.CurrentView
+	arrProj = Rhino.GetObjects("Select curves and points to project", 1 + 4, True, True)
+	
+	If Not IsArray(arrProj) Then
+		Exit Sub 
+	End If
+	
+	arrTarget = Rhino.GetObjects("Select surfaces, polysurfaces or meshes to project onto", 8 + 16 + 32, True, True, True)
+
+	If Not IsArray(arrTarget) Then Exit Sub 
+	
+	
+	Dim Pt1, Pt2
+	
+	If pdir = 0 then
+		arrPts = Rhino.GetPoints(True, , "First direction point", "Second direction point", 2) 
+		pt1 = arrPts(0)
+		pt2 = arrPts(1)
+            
+  
+		If Not IsArray(arrPts) Then Exit Sub
+
+		Rhino.EnableRedraw(False)
+		Dim vec, plane
+	
+		vec = Rhino.VectorCreate(Pt2, Pt1)
+	
+		plane = Rhino.PlaneFromNormal(Pt1, vec)
+		Rhino.ViewCPlane View, Plane
+	Else
+		plane = Rhino.ViewCameraPlane(View)
+		Rhino.ViewCPlane View, Plane
+	End if
+	
+	Rhino.EnableRedraw(False)
+	
+	Rhino.UnSelectAllObjects()
+	Rhino.SelectObjects(arrProj)
+	Rhino.CurrentView View
+		
+		
+	Dim temp, sCmd
+	Rhino.SelectObjects arrTarget
+	sCmd = "_Project "
+	
+	For Each strObject In arrTarget
+		
+		sCmd = sCmd & "_SelID " & CStr(strObject)
+		
+	next
+	
+	sCmd = sCmd & "_Enter _Enter"
+		
+	Rhino.Command sCmd, false
+	
+	
+	If Rhino.LastCommandResult = 0 Then
+		temp = Rhino.LastCreatedObjects()
+		Rhino.UnselectAllObjects()
+		Rhino.SelectObjects temp
+		Rhino.ViewCPlane View, CrntPlane
+	end if
+	
+						
+	Rhino.EnableRedraw(True)
+              
+
+End Sub
+
+Sub TrimFromView()
+	
+	Dim  CrntPLane, View
+
+	crntPLane = Rhino.ViewCplane
+	view = Rhino.CurrentView
+	
+	Dim Plane: plane = Rhino.ViewCameraPlane(View)
+	Rhino.ViewCPlane View, Plane
+	Dim idx: idx = Rhino.ViewProjection(View)
+	If idx <> 1 Then Rhino.ViewProjection View, 1
+
+	Rhino.Command "_Trim"
+	
+	Rhino.ViewCPlane , crntPlane
+	Rhino.ViewProjection View, idx
+              
+End Sub
+    

@@ -1,0 +1,66 @@
+﻿Option Explicit
+'Script written by Pascal
+' RMA
+'Script version Wednesday, December 12, 2012
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "DimensionOffset", "_NoEcho _-Runscript (DimensionOffset)"
+
+
+Private OldDist
+If IsEmpty(oldDist) Then
+	OldDist = 1
+End If
+
+'Call DimensionOffset()
+
+Sub DimensionOffset()
+	Dim adim: aDim = Rhino.GetObjects("Select dimensions to modify.", 512,, True)
+	If Not isArray(aDim) Then Exit Sub
+	
+	Dim dist: dist = Rhino.GetReal("Set Dim text distance", oldDist)
+	If isNull(dist) Then Exit Sub
+	OldDist = dist
+	
+	Dim sDim, n, p1,p2,p3,p4
+	Dim vecX, vecY,	d1, d2, plane, targ
+	Dim testPt, dirpt, idx
+	Dim p(3)
+	
+	Rhino.EnableRedraw False
+	For Each sDim In aDim
+		
+		If Rhino.IsLinearDimension(sDim) Or Rhino.IsAlignedDimension(sDim) Then
+			Rhino.EnableObjectGrips sDim, True
+		
+			p(0) = Rhino.ObjectGripLocation(sdim, 0)
+			p(1) = Rhino.ObjectGripLocation(sdim, 1)
+			p(2) = Rhino.ObjectGripLocation(sdim, 2)
+			p(3) = Rhino.ObjectGripLocation(sdim, 3)
+		
+			d1 = Rhino.Distance(p(0), P(1))
+			d2 = Rhino.Distance(p(2), p(3))
+			testPt = p(0)
+			dirPt = p(1)
+			idx = 1
+		
+			If d1 > d2 Then 
+				TestPt = p(2)
+				dirpt = p(3)
+				idx = 3
+			End If
+		
+			VecX = Rhino.VectorUnitize(Rhino.VectorCreate(dirPt, testpt))
+			Targ = Rhino.PointAdd(Testpt, Rhino.VectorScale(VecX, Dist))
+			Rhino.UnselectAllObjects()
+			Rhino.SelectObjectGrip sDim, idx
+			Rhino.Command "_Move W" & Rhino.Pt2Str(dirpt,, True) & "W" & Rhino.Pt2Str(Targ,, True)
+		
+			Rhino.EnableObjectGrips sDim, False
+		End If
+		
+	Next
+	
+		
+	Rhino.EnableRedraw True
+End Sub

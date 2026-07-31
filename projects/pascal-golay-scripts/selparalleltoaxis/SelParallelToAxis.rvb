@@ -1,0 +1,116 @@
+Option Explicit
+'Script written by Pascal
+
+'Script version Friday, May 30, 2008
+Rhino.AddStartupScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "SelParallelToAxis", "_NoEcho _-RunScript SelParallelToAxis"
+
+
+Sub SelParallelToAxis()
+	
+	Dim aCrv : aCrv = Rhino.ObjectsbyType(4)
+	
+	If Not isarray(aCrv) Then
+		msgbox "No lines found."
+		
+		Exit Sub
+	End If
+	Dim aAxes: aAxes = array("X", "Y", "Z")
+	
+	Dim sAxis: sAxis = Rhino.GetString("Find lines parallel to Cplane axis.",, aAxes)
+	
+	If isNull(sAxis) Then Exit Sub
+	
+	If Not CheckvalidArray(aAxes, sAxis) Then
+		msgBox "Invalid axis choice."
+		Exit Sub
+	End If
+
+	Dim atest(), atest2(), i
+	
+	For i = 0 To 2
+		If uCase(sAxis) <> aAxes(i) Then
+			ReDim Preserve aTest(i)
+			atest(i) = False
+		Else
+			ReDim Preserve aTest(i)
+			atest(i) = True
+		End If
+	Next
+		
+	Dim sCrv, temp1, temp2, stest
+
+	Rhino.EnableRedraw(False)
+
+	For Each sCrv In aCrv 
+		If Rhino.isObjectSelectable(sCrv) Then
+			If Rhino.IsLine(sCrv) Then
+			
+				temp1 = Rhino.CurveStartPoint(sCrv)
+				temp1 = Rhino.XformWorldToCPlane(temp1, Rhino.ViewCPlane)
+				RoundPointCoordinates temp1, 8
+				temp2 = Rhino.CurveEndPoint(sCrv)
+				temp2 = Rhino.XformWorldToCPlane(temp2, Rhino.ViewCPlane)
+				RoundPointCoordinates temp2, 8
+				
+				For i = 0 To 2
+					If temp1(i) = temp2(i) Then 
+					
+						ReDim Preserve aTest2(i)
+						atest2(i) = False
+					Else
+						ReDim Preserve aTest2(i)
+						atest2(i) = True
+					End If
+					
+				Next
+				
+				sTest = True
+				
+				For i = 0 To 2
+					If aTest2(i) <> aTest(i) Then
+						sTest = False
+						Exit For
+					End If
+				Next
+				
+				If sTest = True Then
+					Rhino.SelectObject(sCrv)
+				End If
+				
+			End If
+		
+		End If
+	
+	Next
+	
+	Rhino.EnableRedraw(True)	
+	
+End Sub
+
+
+
+Function CheckValidArray(arrCheck, strToCheck)
+
+	Dim blnStatus, strCheck
+
+	blnStatus = False
+	If IsArray(arrCheck) Then
+		For Each strCheck In arrCheck
+			If UCase(strToCheck) = UCase(strCheck) Or strToCheck = ""Then
+				blnStatus = True
+				Exit For
+			End If
+		Next
+	End If
+	CheckValidArray = blnStatus
+
+End Function
+
+Sub RoundPointcoordinates(ByRef apt, intRnd)
+
+	apt(0) = round(apt(0), intRnd)
+	apt(1) = round(apt(1), intRnd)
+	apt(2) = round(apt(2), intRnd)
+	
+End Sub

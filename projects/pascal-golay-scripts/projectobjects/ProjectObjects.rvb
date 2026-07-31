@@ -1,0 +1,257 @@
+Option Explicit
+'Script written by Pascal
+
+'Script version Thursday, February 05, 2009
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "ProjectObjects", "_NoEcho _-RunScript (ProjectObjects)"
+
+Private OldXpts, OldYPts, OldDir, OldSide
+
+If isEmpty(oldXPts) Then
+	OldXpts = 4	
+End If
+
+If isEmpty(oldYPts) Then
+	OldYpts = 4
+End If
+
+If isEmpty(oldDir) Then
+	OldDir = "CplaneZ"
+End If
+
+If isEmpty(oldSide) Then
+	OldSide = array(True)
+End If
+
+'Call ProjectObjects()
+
+Sub ProjectObjects()
+	
+	Dim aCaptives: aCaptives = Rhino.GetObjects("Select objects to project.",,, True)
+	If Not isArray(aCaptives) Then Exit Sub
+	
+	Dim sTarg: sTarg = Rhino.GetObject("Select target surface or polysurface", 8 + 16)
+	If isNull(sTarg) Then Exit Sub
+	
+	Dim CrntView: CrntView = Rhino.CurrentView()
+	Dim CrntPlane: 	CrntPlane = Rhino.ViewCPlane(CrntView)
+	
+	Dim BlnCopy: BlnCopy = Rhino.GetBoolean("Copy?", array("Copy", "No", "Yes"), array(True))
+	If isNull(BlnCopy) Then Exit Sub
+	
+	If BlnCopy(0) = True Then
+		Rhino.CopyObjects aCaptives
+	End If
+	
+	Dim aDir: aDir = array("WorldZ", "CplaneZ", "User")
+	Dim SDir: SDir = Rhino.GetString("Projection direction", OldDir, aDir)
+	If IsNull(sDir) Then Exit Sub
+	OldDir = sDir
+	
+	Dim VecDir, aTemp
+		
+
+	If IsStringInArray(sDir, aDir, 0) Then
+		
+		If lcase(sDir) = "worldz" Then
+			vecDir = array(0, 0, 1)
+			
+		ElseIf lcase(sDir) = "cplanez" Then
+			vecDir = crntPlane(3)
+			
+		ElseIf lcase(sDir) = "user" Then
+			aTemp = Rhino.GetPoints(True, False, "First direction point", "Second direction point.", 2)
+			
+			If Not isArray(aTemp) Then Exit Sub
+			If UBound(aTemp) <> 1 Then Exit Sub
+			
+			VecDir = Rhino.VectorUnitize(Rhino.VectorCreate(atemp(1), atemp(0)))
+			
+		End If
+		
+	Else Exit Sub
+		
+	End If
+		
+	Dim BlnSide: blnSide = Rhino.GetBoolean("Project to top side of target?", array("ProjectTo", "Bottom", "Top"), OldSide)
+	If isNull(blnSide) Then Exit Sub
+	OldSide = BlnSide
+	
+	Dim MaxDensity: MaxDensity = 50
+	
+	Dim XPts: XPts = Rhino.GetInteger("X density", OldXPts, 2, MaxDensity)
+	If isnull(Xpts) Then Exit Sub
+	OldXpts = Xpts
+	
+	Dim YPts: YPts = Rhino.GetInteger("Y density", OldYPts, 2, MaxDensity)
+	If isnull(Ypts) Then Exit Sub
+	OldYpts = Ypts
+	
+	'Zpts = 2
+	Rhino.EnableRedraw(False)
+	
+	Rhino.CurrentView CrntView
+	
+	If lCase(sDir) = "user" Then
+		Dim Plane: Plane = Rhino.PlaneFromNormal(aTemp(0), VecDir)	
+	End If
+	
+	If BlnSide(0) = False Then
+		If lCase(SDir) = "cplanez" Then
+			Dim VecPlane: vecPlane = Rhino.VectorReverse(Rhino.ViewCPlane()(3))
+			Rhino.ViewCPlane, Rhino.PlaneFromFrame(Rhino.ViewCPlane()(0), Rhino.ViewCPlane()(2), Rhino.ViewCPlane()(1))
+		ElseIf lcase(sDir) = "worldz" Then
+			
+			Rhino.ViewCPlane, Rhino.PlaneFromFrame(array(0, 0, 0), array(0, 1, 0), array(1, 0, 0))
+		End If
+	Else
+		If lcase(sDir) = "worldz" Then
+			rhino.ViewCPlane , Rhino.WorldXYPlane
+		End If
+
+	End If
+	
+			
+	Dim aCage, SCage
+	Rhino.UnselectAllObjects
+	Rhino.SelectObjects aCaptives
+
+	Dim cmdStr
+	
+	'build the command string
+	
+	cmdStr = "_CageEdit _BoundingBox _CPlane"	
+	cmdStr = cmdStr & " _XPointCount " & CStr(XPts)
+	cmdStr = cmdStr & " _YPointCount " & CStr(YPts)
+	cmdStr = cmdStr & " _ZPointCount 2 " 
+	cmdStr = cmdStr & " _XDegree=3 _YDegree=3 _ZDegree=1" 
+	cmdStr = cmdStr & " _Enter _Enter"
+	Rhino.Print cmdStr
+	
+	'Run the Rhino command
+	Rhino.Command cmdStr, False
+
+	If Rhino.LastCommandResult = 0 Then
+		aCage = Rhino.ObjectsByType(131072)
+		
+		If IsArray(aCage) Then 
+			sCage = aCage(0)
+		End If
+	End If
+	
+	If IsNull(sCage) Then 
+		Rhino.ViewCPlane Rhino.CurrentView, CrntPlane
+		Rhino.EnableRedraw
+		Exit Sub
+	End If
+	
+
+	Rhino.EnableObjectGrips sCage
+
+	Dim aGrips: aGrips = Rhino.ObjectGripLocations(sCage)
+
+	Dim BlnMove: BlnMove = MoveCagePoints(aGrips, sCage, sTarg, VecDir)
+	
+	
+	If Not BlnMove Then
+		
+		If BlnCopy(0) = True Then
+			Rhino.DeleteObjects aCaptives
+		End If
+		
+		Rhino.DeleteObject sCage
+		Rhino.EnableRedraw(True)
+		msgBox "The bounding box of the objects must fit within the target object edges in the projection direction." & vbnewLine & " Try untrimming the target, or otherwise expanding it."
+		Exit Sub
+	End If
+	
+	Rhino.EnableObjectGrips sCage, False
+
+	Rhino.ViewCPlane CrntView, CrntPlane
+
+	Rhino.DeleteObject sCage
+	Rhino.EnableRedraw(True)
+	
+End Sub
+
+
+Function MoveCagePoints(aGrips, sCage, sTarg, VecDir)
+	MoveCagePoints = True
+	
+	Dim i, Pt1, Pt2, aTargPt
+	Dim vector
+	
+	For i = 0 To uBound(aGrips) Step 2
+
+		Pt1 = aGrips(i)
+		Pt2 = aGrips(i + 1)
+		
+		aTargPt = Rhino.ProjectPointToSurface(Pt1, sTarg, vecDir)
+		
+		If isArray(aTargPt) Then
+			
+			vector = Rhino.VectorCreate(aTargPt(0), pt1)
+			Rhino.ObjectGripLocation sCage, i, Rhino.PointAdd(pt1, vector)
+			Rhino.ObjectGripLocation sCage, i + 1, Rhino.PointAdd(pt2, vector)
+		
+		Else 
+			MoveCagePoints = False
+			Exit Function
+		End If
+	Next
+	
+
+End Function
+
+Function IsStringInArray(item, arr, intCase)
+	'Non case-sensitive= 0, case-sensitive = 1
+	
+	'****************************************************
+	'NOTE: NEEDS 'ISUPPERBOUND' FUNCTION TO BE AVAILABLE
+	'****************************************************
+	
+	Dim result :  Result = False
+	Dim sItem
+	
+	If isUpperBound(arr) Then
+		
+		If intCase = 0 Then
+			For Each sItem In arr
+				If LCase(sItem) = LCase(Item) Then
+					Result = True
+					Exit For
+				End If
+			Next
+		Else
+			For Each sItem In arr
+				If sItem = Item Then
+					Result = True
+					Exit For
+				End If
+			Next	
+		End If
+		
+	End If
+	
+	IsStringInArray = Result
+	
+End Function
+
+
+
+Function IsUpperBound(ByRef arr)
+
+	IsUpperBound = False
+
+	If IsArray(arr) Then
+
+		On Error Resume Next
+
+		UBound arr
+
+		If Err.Number = 0 Then IsUpperBound = True
+
+	End If
+
+End Function
