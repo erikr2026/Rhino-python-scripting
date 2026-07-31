@@ -1,0 +1,240 @@
+Option Explicit
+'Script written by Pascal
+'RMA
+'Script version Wednesday, November 14, 2012
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "SetbackFillet", "_NoEcho _-Runscript (SetbackFillet)"
+
+Private Oldrad, oldDel
+If isEmpty(oldrad) Then
+	Oldrad = 1
+End If
+
+If isEmpty(oldDel) Then
+	OldDel = "Yes"
+End If
+
+'Call SetbackFillet()
+
+Sub SetbackFillet()
+
+	Dim aCrv: aCrv = Rhino.GetObjects("Select curves to fillet.", 4, True, True)
+	If Not isArray(aCrv) Then Exit Sub
+	
+	
+	
+	Dim rad: rad = Rhino.GetReal("Setback distance.", Oldrad, 10 * Rhino.UnitAbsoluteTolerance())
+	
+	Dim sDel: sDel = Rhino.GetString("Delete inputs?", oldDel, array("Yes", "No"))
+	Dim blnDel: blnDel = True
+	
+	If lcase(sDel) = "no" Then
+		oldDel = "No"
+		blnDel = False
+	Else
+		OldDel = "Yes"
+	End If
+	
+	If isNull(rad) Then Exit Sub
+	Oldrad = rad
+	
+	Dim plane, atemp, p1, p2, n, c1, c2, i
+	n = 0
+	Dim sCrv, aInfo, aCopies, apts, apt, aint, tempArc, aArcs(), tempC
+	Dim aPar(), p
+	Dim vec1, vec2, inputCrv, aTempCrv, count
+	
+	Dim aCrvs: aCrvs = WeedOutCurves(aCrv)
+	
+	
+	Rhino.EnableRedraw False
+	
+	For Each sCrv In aCrvs
+		If  Rhino.IsCurvePlanar(sCrv) Then
+		
+		
+			If blnDel = False Then Rhino.CopyObject sCrv
+		
+			If Rhino.IsPolyline(sCrv) Then
+				Dim arr
+				arr = Rhino.Explodecurves(sCrv, True)
+				sCrv = rhino.JoinCurves(arr, True)(0)
+			End If
+				
+			plane = Rhino.CurvePlane(sCrv)
+		
+			apts = Rhino.CurveDiscontinuity(sCrv, 4)
+		
+			If isArray(aPts) Then
+				n = 0
+				p = 0
+				For Each apt In aPts
+				
+					Plane(0) = apt
+					tempC = Rhino.AddCircle(Plane, rad)
+					aInt = Rhino.CurveCurveIntersection(sCrv, tempC)
+					Rhino.DeleteObject tempC
+					p1 = aInt(0, 1)
+					p2 = aInt(1, 1)
+					'	Rhino.AddPoints array(p1, p2)
+					tempArc = Rhino.AddArcPtTanPt(P1, Rhino.VectorCreate(apt, p1), p2)
+				
+					If Not isNull(tempArc) Then
+						ReDim Preserve aArcs(n)
+						aArcs(n) = tempArc
+						n = n + 1
+						ReDim Preserve aPar(p)
+					
+						aPar(p) = Rhino.CurveClosestPoint(sCrv, P1)
+						p = p + 1
+						ReDim Preserve aPar(p)
+					
+						aPar(p) = Rhino.CurveClosestPoint(sCrv, P2)
+						p = p + 1
+					End If
+					
+				Next
+				
+				If Rhino.IsCurveClosed(sCrv) Then
+				
+					'add the start/end points to the mix
+
+	
+					count = Rhino.PolyCurveCount(sCrv)
+					If isNull(Count) Then
+						Rhino.SimplifyCurve(sCrv)
+					
+						If Rhino.IsPolyline(sCrv) Then
+						
+							arr = Rhino.Explodecurves(sCrv, True)
+							sCrv = rhino.JoinCurves(arr, True)(0)
+						End If
+					
+						count = Rhino.PolyCurveCount(sCrv)
+					End If
+				
+				
+					vec1 = Rhino.CurveTangent(sCrv, Rhino.CurveClosestPoint(sCrv, Rhino.CurveEndPoint(sCrv), count - 1), count - 1)
+					vec2 = Rhino.CurveTangent(sCrv, Rhino.CurveClosestPoint(sCrv, Rhino.CurveStartPoint(sCrv), 0), 0)
+					'			
+					If Rhino.IsVectorParallelTo(vec1, Vec2) = 0 Then
+			
+						Plane(0) = Rhino.CurveEndPoint(sCrv)
+						tempC = Rhino.AddCircle(Plane, rad)
+						aInt = Rhino.CurveCurveIntersection(sCrv, tempC)
+						Rhino.DeleteObject tempC
+						p1 = aInt(0, 1)
+						p2 = aInt(1, 1)
+						'	Rhino.AddPoints array(p1, p2)
+				
+						tempArc = Rhino.AddArcPtTanPt(P1, Rhino.VectorCreate(Plane(0), p1), p2)
+					
+						If Not isNull(tempArc) Then
+							ReDim Preserve aArcs(n)
+							aArcs(n) = tempArc
+							n = n + 1
+							ReDim Preserve aPar(p)
+					
+							aPar(p) = Rhino.CurveClosestPoint(sCrv, P1)
+							p = p + 1
+							ReDim Preserve aPar(p)
+					
+							aPar(p) = Rhino.CurveClosestPoint(sCrv, P2)
+							p = p + 1
+						
+						End If
+				
+					End If
+	
+				End If
+
+			End If
+			
+			Dim sSplit, X
+			Dim aSplit: aSplit = Rhino.SplitCurve(sCrv, apar, False)
+			
+			Dim testpt, tempArray, endPt
+
+			If Rhino.IsCurveClosed(sCrv) Then
+				tempArray = Rhino.JoinArrays(aPts, array(Rhino.CurveStartPoint(sCrv)))
+			Else
+				tempArray = aPts
+			End If
+			
+			For Each sSplit In aSplit
+				
+				If uBound(tempArray) = 0 Then
+					testPt = tempArray(0) 
+				Else
+					
+					testpt = tempArray(Rhino.PointArrayClosestPoint(tempArray, Rhino.CurveMidPoint(sSplit)))
+				End If
+				
+				If Rhino.Distance(testpt, Rhino.EvaluateCurve(sSplit, Rhino.CurveClosestPoint(sSplit, testpt))) < rad / 2 Then
+					Rhino.DeleteObject sSplit
+					n = n + 1											
+					Rhino.DeleteObject sCrv
+				End If
+
+			Next
+		Else
+			Rhino.Print "Skipped a non-planar curve"
+		End If
+		
+		Dim aAll: aAll = Rhino.JoinArrays(aArcs, aSplit)
+				
+		If isArray(aAll) Then Rhino.JoinCurves aAll, True
+										
+	Next
+	Rhino.UnselectAllObjects()
+	Rhino.EnableRedraw True
+	
+End Sub
+
+
+Function VectorAngle(Vec1, vec2)
+	
+	Vec1 = Rhino.VectorUnitize(Vec1)
+	Vec2 = Rhino.VectorUnitize(Vec2)
+	
+	Dim DP: DP = Vec1(0) * Vec2(0) + Vec1(1) * Vec2(1) + Vec1(2) * Vec2(2)
+	
+	If DP > .999999 Then
+		VectorAngle = 0
+	ElseIf DP < -.999999 Then  
+		VectorAngle = Rhino.ToDegrees(Rhino.Pi())
+	Else
+		VectorAngle = arcos(DP, False)
+	End If
+	
+End Function
+
+Function Arcos(dblAng, blnRad)
+	'dblAng input in radians
+	
+	If BlnRad = True Then 'output in radians
+		Arcos = Atn(-dblAng / Sqr(-dblAng * dblAng + 1)) + 2 * Atn(1)
+	Else 'output in degrees
+		Arcos = Rhino.ToDegrees(Atn(-dblAng / Sqr(-dblAng * dblAng + 1)) + 2 * Atn(1))
+	End If
+	
+End Function
+
+Function WeedOutCurves(aCrv)
+	Dim result()
+	Dim n, sCrv
+	n = 0
+	For Each sCrv In aCrv
+		If Not Rhino.IsLine(sCrv) Then
+			If Rhino.IsCurvePlanar(sCrv) Then
+				ReDim Preserve result(n)
+				result(n) = sCrv
+				n = n + 1
+			End If
+			
+		End If
+	Next
+	
+	WeedOutCurves = result
+End Function

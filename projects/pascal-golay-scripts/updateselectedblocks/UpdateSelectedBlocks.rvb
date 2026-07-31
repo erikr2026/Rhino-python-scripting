@@ -1,0 +1,40 @@
+Option Explicit
+'Script written by Pascal
+' RMA
+'Script version Wednesday, March 14, 2012
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "UpdateSelectedBlocks", "_NoEcho _-Runscript (UpdateSelectedBlocks)"
+
+'Call UpdateSelectedBlocks()
+Sub UpdateSelectedBlocks()
+
+	Dim aObj: aObj = Rhino.GetObjects("Select blocks to update.", 4096,, True)
+	If Not isArray(aObj) Then Exit Sub
+
+	
+	
+	Dim sBlock, aUpdate(), n
+	n = 0
+	
+
+	For Each sBlock In aObj
+		ReDim Preserve aUpdate(n)
+		aUpdate(n) = Rhino.BlockInstanceName(sBlock)
+		n = n + 1
+	Next
+	Dim aFinal: aFinal = Rhino.CullDuplicateStrings(aUPdate)
+	
+
+	Dim str
+	str = ""
+	
+	For Each sBlock In aFinal
+		str = str & " _Update " & chr(34) & Rhino.BlockInstanceName(sBlock) & chr(34)	
+	Next
+	
+	str = "_-BlockManager" & str & " _Enter _Enter"
+	
+	Rhino.Command str, False
+	
+End Sub

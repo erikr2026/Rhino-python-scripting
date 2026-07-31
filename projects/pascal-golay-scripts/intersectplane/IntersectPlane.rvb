@@ -1,0 +1,408 @@
+Option Explicit
+'Script written by Pascal
+'RMA
+'Script version Friday, April 04, 2008
+
+'finds the intersections of objects and infinite planes defined by
+'1. A selected planar surface of any size
+'2. The current cplane
+'3. World and local XY,ZX,YZ planes (Local XY = Current cplane of course)
+'4. Named Cplanes
+'5. 3Point user defined planes.
+
+Rhino.AddStartUpScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "IntersectPlane", "_NoEcho _-Runscript IntersectPlane"
+Rhino.AddAlias "TrimWithPlane", "_NoEcho _-Runscript TrimWithPlane"
+Rhino.AddAlias "SplitWithPlane", "_NoEcho _-Runscript SplitWithPlane"
+Rhino.AddAlias "BooleanSplitWithPlane", "_NoEcho _-Runscript BooleanSplitWithPlane"
+
+Private sOldPlaneType, OldCplaneType
+
+If isEmpty(sOldPlaneType) Then
+	sOldPlaneType = "Select"
+End If
+
+If isEmpty(OldCPlaneType) Then
+	OldCPlaneType = "WorldXY"
+End If
+
+'Call SplitWithPlane()
+
+Sub TrimWithPlane()
+	
+	IntersectThePlane(1)
+	
+End Sub
+
+Sub IntersectPlane
+	IntersectThePlane(0)
+	
+End Sub
+
+Sub SplitWithPlane
+	
+	IntersectThePlane(2)
+
+End Sub
+
+Sub BooleanSplitWithPlane
+	IntersectThePlane(3)
+	
+End Sub
+
+
+Sub IntersectThePlane(intTrim)
+	
+	Dim aPlaneType: aPlaneType = array("Select", "CurrentCPlane", "CPlanes", "NamedCplane", "3pt", "TangentPlane", "CutPlane")	
+	Dim aCplaneTypes: aCplaneTypes = array("XY", "XZ", "YZ", "WorldXY", "WorldZX", "WorldYZ")
+		
+	Dim aObj
+	
+	If intTrim = 0 Or intTrim = 2 Or intTrim = 3 Then
+		aObj = Rhino.GetObjects("Select objects. Press Enter when done.",, True, True)
+		If Not isArray(aObj) Or isnull(aObj) Then Exit Sub
+	End If
+	
+	Dim sPlaneType: sPlaneType = Rhino.GetString("Plane type", sOldPlaneType, aPlaneType)
+	
+	
+	If Not isNull(sPlaneType) Then
+		
+		Dim intPos:	intPos = WhereInArray(sPlaneType, aPlaneType, 1)
+		
+		If intPos = -1 Then Exit Sub
+		
+		sPlaneType = aPlaneType(intPos)
+		sOldPlaneType = aPLaneType(intPos)
+	
+	End If
+
+	
+	sPlaneType = UCase(sPlaneType)
+		
+	Select Case sPlaneType
+			
+		Case "SELECT"
+	
+			Dim sPlane: sPlane = Rhino.GetObject("Select object to set plane.", 2 + 4 + 8 + 16 + 32 + 536870912)
+			If isNull(sPlane) Then Exit Sub
+				
+			'msgBox Rhino.ObjectType(sPlane)
+				
+				
+			Dim aPlane
+		
+			If Rhino.IsSurface(sPlane) And Not Rhino.IsClippingPlane(sPlane)  Then
+					
+				If Rhino.IsSurfacePlanar(sPlane) Then
+			
+					Dim aParamU: aParamU = Rhino.SurfaceDomain(sPlane, 0)
+					Dim dblParamU : dblparamU = (aParamU(1) + aParamU(0)) / 2
+					Dim aParamV : aParamV = Rhino.SurfaceDomain(sPlane, 1)
+					Dim dblParamV : dblParamV = (aParamV(1) + aParamV(0)) / 2
+					Dim aParam: aParam = array(dblParamU, dblParamV)
+	
+					aPlane = Rhino.SurfaceFrame(sPlane, aParam)
+				Else
+					MsgBox "The surface must be planar"
+				End If
+					
+			ElseIf Rhino.IsCurve(sPlane) Then
+					
+				If Not Rhino.IsCurvePlanar(sPlane) Then
+					MsgBox "The curve must be planar"
+				Else
+					aPlane = Rhino.CurvePlane(sPlane)
+				End If
+					
+			ElseIf Rhino.IsPointCloud(sPlane) Then aPlane = Rhino.PlaneFitFromPoints(Rhino.PointCloudPoints(sPlane))
+					
+			ElseIf Rhino.IsMesh(sPlane) Then aPlane = Rhino.PlaneFitFromPoints(Rhino.MeshVertices(sPlane))
+					
+			ElseIf Rhino.IsClippingPlane(sPlane) Then	aPlane = Rhino.ClippingPlaneDefinition(sPlane)
+	
+			End If
+				
+		Case "CURRENTCPLANE"
+			aPlane = Rhino.ViewCPlane(Rhino.CurrentView)
+			
+		Case "CPLANES"
+			Dim sCplaneType:	sCPlaneType = Rhino.GetString("Choose Cplane", OldCPlaneType, aCplaneTypes)
+			If Not isnull(sCPlaneType) Then
+					
+				intPos = WhereInArray(sCplaneType, aCPLaneTypes, 1)
+				If  intPos = -1 Then Exit Sub
+					
+				'				If CheckValidArray(aCplaneTypes, sCPlaneType)Then
+				OldCPlaneType = aCplaneTypes(intPos)
+				Dim Temp
+						
+				Select Case intPos
+							
+					Case 0
+						aPLane = Rhino.ViewCPlane(Rhino.CurrentView)
+					Case 1
+						aPlane = Rhino.ViewCPlane(Rhino.CurrentView)
+						Temp = Rhino.RotatePlane(aPlane, 90, aPlane(1))
+						aPlane = Temp
+					Case 2
+						aPlane = Rhino.ViewCPlane(Rhino.CurrentView)
+						Temp = Rhino.RotatePlane(aPlane, 90, aPlane(2))
+						aPlane = Temp
+					Case 3
+						aPlane = Rhino.WorldXYPlane
+					Case 4
+						aPlane = Rhino.WorldZXPlane
+					Case 5
+						aPlane = Rhino.WorldYZPlane
+					Case Else 
+						Exit Sub
+							
+				End Select	
+					
+				
+			Else Exit Sub
+			End If
+			
+		Case "NAMEDCPLANE"
+			Dim aNamed: aNamed = Rhino.NamedCPlanes
+			If isArray(aNamed) Then
+				Dim sNamed: sNamed = Rhino.ListBox(aNamed, "Select saved Cplane", "Saved Cplanes")
+				If isnull(sNamed) Then Exit Sub
+				aPlane = Rhino.NamedCPlane(sNamed)
+			Else 
+				MsgBox "The NamedCPlanes option allows selection of CPlanes that are named and saved If the file." _
+					& vbNewline & "No named CPlanes were found If the file."
+				Exit Sub
+				
+			End If
+		Case "3PT"
+			Dim aPlanepts: aPlanePts = Rhino.GetPoints(True, False, "First plane point", "Next plane point", 3)
+			
+			If isArray(aPlanePts) Then
+				If Ubound(aPlanePts) = 2 Then
+					aPlane = Rhino.PlanefromPoints(aPlanePts(0), aPlanePts(1), aPlanePts(2))
+				Else Exit Sub
+				End If
+			Else Exit Sub
+			End If
+		Case "TANGENTPLANE"
+			Dim sSrf: sSrf = Rhino.GetObject("Select surface.", 8)
+			If isNull(sSrf) Then Exit Sub
+			Dim srfpt: srfPt = Rhino.GetPointOnSurface(sSrf, "Set tangent point.")
+			If Not isArray(srfpt) Then Exit Sub
+			Dim aPar: aPar = Rhino.SurfaceClosestPoint(sSrf, srfpt)
+			aPlane = Rhino.PlaneFromNormal(srfPt, Rhino.SurfaceNormal(sSrf, Rhino.SurfaceClosestPoint(sSrf, srfPt)))
+			
+		Case "CUTPLANE"
+				
+			Dim aPts:aPts = Rhino.getPoints(True, True, "Start of cut plane", "End of cut plane", 2)
+			If Not isArray(aPts) Then Exit Sub
+			If  Ubound(aPts) <> 1 Then Exit Sub
+			ReDim Preserve aPts(2)
+			aPts(2) = Rhino.PointAdd(aPts(0), Rhino.ViewCPlane(Rhino.CurrentView)(3))
+			aPlane = Rhino.PlanefromPoints(aPts(0), aPts(1), aPts(2))
+			
+		Case Else
+			Exit Sub
+	End Select
+
+	Rhino.EnableRedraw(False)
+
+	Dim CrntPlane: CrntPlane = Rhino.ViewCplane(Rhino.CurrentView)
+	
+	rhino.Print Rhino.Pt2Str(aPlane(0))
+	Rhino.ViewCPlane Rhino.CurrentView(), aPlane 
+	
+
+	Dim aBBPlane
+	
+	If intTrim <> 1 Then
+		aBBPlane = Rhino.BoundingBox(aObj, Rhino.CurrentView)
+	
+	Else
+		aBBPlane = Rhino.BoundingBox(Rhino.NormalObjects(), Rhino.CurrentView)
+	
+	End If
+		
+	Dim dblDist: dblDist = Rhino.Distance(aBBPlane(0), aBBPlane(6)) 
+	
+	aPlane(0) = Rhino.PlaneClosestPoint(aPlane, AveragePoints(array(aBBPlane(0), aBBPlane(2))))
+	
+	Dim VecX: vecX = Rhino.VectorScale(Rhino.VectorUnitize(aPlane(1)), dblDist)
+	Dim VecY: VecY = Rhino.VectorScale(Rhino.VectorUnitize(aPlane(2)), dblDist)
+	Dim vecXY: vecXY = Rhino.VectorAdd(VecX, VecY)
+
+	VecXY = Rhino.VectorReverse(Rhino.VectorScale(VecXY, 0.5))
+	
+	Rhino.EnableRedraw(False)
+	aPlane(0) = Rhino.PointAdd(aPlane(0), VecXY)
+	
+	Dim sTestPlane: sTestPlane = Rhino.AddPlaneSurface(aPlane, dblDist, dblDist)
+	
+	Rhino.ViewCPlane Rhino.CurrentView, CrntPlane
+	
+	If intTrim = 1 Then
+		Rhino.SurfaceIsoCurveDensity sTestPlane, 0
+		Rhino.UnselectAllObjects
+		Rhino.SelectObject sTestPlane
+		Dim sView: sView = Rhino.CurrentView()
+	
+		Dim aViews: aViews = Rhino.ViewNames(False, 0)
+	
+		Dim ViewID
+		For Each ViewID In aViews
+			Rhino.CurrentView(ViewID)
+			Rhino.Command "_SetObjectDisplayMode _Mode=Ghosted", False
+		Next
+		Rhino.CurrentView sView
+		'Rhino.EnableRedraw(True)
+	End If
+	
+
+	Dim sObj, aLast, sLast, aresult(), n
+	n = 0
+	
+	If intTrim = 0 Then
+		For Each sObj In aObj
+			
+			Rhino.UnselectAllObjects
+			Rhino.SelectObject(sobj)
+			Rhino.SelectObject sTestPlane
+			Rhino.Command "_Intersect _NoEcho ", False
+		
+			If Rhino.LastCommandResult = 0 Then
+				aLast = Rhino.SelectedObjects
+			End If
+		
+			If IsArray(aLast) Then
+				For Each sLast In aLast
+					ReDim Preserve aResult(n)
+					aResult(n) = sLast
+					n = n + 1 
+				Next
+			End If
+		Next
+	
+		If n > 0 Then
+			Rhino.SelectObjects aResult
+		End If	
+	End If
+	
+	If inttrim = 0 Then
+		
+		'	Rhino.DeleteObject sTestPlane
+		Rhino.Print n & " intersections found."
+	
+		
+	ElseIf intTrim = 1 Then
+		
+		
+		Rhino.UnselectAllObjects
+		Rhino.SelectObject sTestPlane
+		Rhino.Command "_SetObjectDisplayMode _Ghosted", False
+		Rhino.EnableRedraw True
+		Rhino.Command "_Trim"
+		
+		
+	ElseIf intTrim = 2 Then
+	
+		Rhino.UnselectAllObjects()
+		Rhino.SelectObjects aObj
+		Rhino.Command "_Split _SelID " & sTestPlane & " _Enter"
+		
+		
+	Else
+		
+		Rhino.UnselectAllObjects()
+		Rhino.SelectObjects aObj
+		Rhino.Command "_BooleanSplit _SelID " & sTestPlane & " _Enter"
+		
+		
+	End If
+	Rhino.DeleteObject sTestPlane
+	Rhino.ViewCPlane Rhino.CurrentView, CrntPlane
+	Rhino.EnableRedraw(True)
+
+End Sub
+
+
+Function WhereInArray(item, arr, intCase)
+	'Finds the locaton of a string in an array of strings
+	'if the result is -1 then the item does not
+	'appear in tha array
+	'intCase 0 = Case Sensitve
+
+	Dim sItem, n, i
+	n = False
+	WhereInArray = -1
+
+		
+	For i = 0 To UBound(arr)
+			
+		If intCase = 0 Then
+			If arr(i) = Item Then
+				
+				WhereInArray = i
+				n = True
+				Exit For
+		
+				
+			End If
+			
+		Else 
+			
+			If lCase(arr(i)) = LCase(Item) Then
+				
+				WhereInArray = i
+				n = True
+				Exit For
+	
+			End If
+			
+		End If
+			
+	Next
+	
+
+	If n = False Then WhereInArray = -1
+	
+End Function
+
+Function AveragePoints(arrPts)
+	'Finds the average location of an array
+	'of points.
+
+	Dim X, Y, Z
+	Dim i
+	
+	X = 0
+	Y = 0
+	Z = 0
+
+	For i=0 To UBound(arrPts)
+			
+		'add all the X values
+		X = X + arrPts(i)(0)
+	
+		'add all th Y values
+		Y = Y + arrPts(i)(1)			
+	
+		'add all the Z values
+		Z = Z + arrpts(i)(2)
+	Next
+	
+	'Divide by the number of points to
+	'get the average  For Each
+	'create the output array from the 3 averages
+	AveragePoints = array(X / (UBound(arrPts) + 1), Y / (UBound(arrPts) + 1), Z / (UBound(arrPts) + 1))
+
+End Function
+
+
+'Sub Main()
+'	Dim sPlane: sPlane = Rhino.GetObject(, 536870912)
+'	Dim aPlane: aPlane = Rhino.ClippingPlaneDefinition(sPlane)
+'	Rhino.Print Rhino.Pt2str(aPlane(0))
+'	
+'End Sub

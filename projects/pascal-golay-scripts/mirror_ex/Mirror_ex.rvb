@@ -1,0 +1,279 @@
+Option Explicit
+'Script written by Pascal
+'Script version Monday, September 28, 2009 
+
+Rhino.AddStartupScript Rhino.LastLoadedScriptFile
+Rhino.AddAlias "MirrorEx", "_NoEcho _-Runscript (MirrorEx)"
+
+Private OldMirStyle, oldPlaneStyle
+
+If isEmpty(OldMirStyle) Then
+	OldMirStyle = "Standard"
+End If
+
+If isEmpty(OldPlaneStyle) Then
+	OldPlaneStyle = "TwoPt"
+End If
+
+
+'Call MirrorEx()
+
+Sub MirrorEx()
+	
+	
+	Dim aObj: aObj = Rhino.GetObjects("Select objects to mirror",,, True, True)
+	If Not isArray(aObj) Then Exit Sub
+	
+	Dim Plane
+	
+	Dim intPlaneStyle, aPlaneStyle, sPlaneStyle
+	Dim intStyle, aStyle,sStyle
+	
+	If IsArray(Rhino.NamedCPlanes) Then
+		aPlaneStyle = array("TwoPt", "ThreePt", "Select", "Cplane", "NamedCPlane")
+	Else
+		aPlaneStyle = array("TwoPt", "ThreePt", "Select", "Cplane")
+	End If
+		
+	aStyle = array("Standard", "PositionOnly", "TextPositionOnly")
+	
+	sStyle = Rhino.GetString("Choose mirror style", OldMirStyle, aStyle)
+	If isNull(sStyle) Then Exit Sub
+	Dim testInt
+	
+	TestInt = WhereInArray(sStyle, aStyle, 0)
+	If testInt <> -1 Then
+		intStyle = testInt
+	Else Exit Sub
+	End If
+	OldMirStyle = aStyle(testInt)
+	
+	
+	sPlaneStyle = Rhino.GetString("Choose mirror plane", OldPlaneStyle, aPlaneStyle)
+	If isNull(sPlaneStyle) Then Exit Sub
+
+	
+	TestInt = WhereInArray(sPlaneStyle, aPlaneStyle, 0)
+	If testInt <> -1 Then
+		intPlaneStyle = testInt
+	Else Exit Sub
+	End If
+	OldPlaneStyle = aPlaneStyle(testInt)
+	
+	'		aPlaneStyle = array ("TwoPt", "ThreePt","Select","Cplane","NamedCPlane")
+	Select Case intPlaneStyle
+		Case 0
+			Plane = VerticalPlaneFrom2Pts()	
+		Case 1
+			Plane = Plane3Pt()
+		Case 2
+			Plane = PlaneFromSelection()
+		Case 3
+			Plane = Rhino.ViewCplane()
+		Case 4
+			Plane = GetNamedCPlane()
+			
+	End Select
+	
+	If Not isArray(Plane) Then Exit Sub
+	
+	'	aStyle = array("Standard","PositionOnly","TextPositionOnly")
+	Select Case intStyle
+		Case 0
+			MirrorAcrossPlane aObj, Plane
+		Case 1
+			MirrorPosition aObj, Plane
+		Case 2
+			Dim sobj, aText(),aMisc(), n, i
+			n = 0
+			i = 0
+			For Each sObj In aObj
+				If Rhino.IsText(sobj) Then
+					ReDim Preserve atext(n)
+					atext(n) = sObj
+					n = n + 1
+				Else
+					ReDim Preserve aMisc(i)
+					aMisc(i) = sObj
+					i = i + 1
+				End If
+			Next
+			If n > 0 Then	MirrorPosition aText, Plane
+		
+			If i > 0 Then MirrorAcrossPlane aMisc, Plane
+		
+	End Select		
+
+End Sub
+
+Function MirrorPosition(aObj, Plane)
+
+	Dim sObj
+	For Each sObj In aObj
+		Dim aLoc:aLoc = BBCentroid(sObj)
+	Dim VecTarg:VecTarg = Rhino.VectorCreate(Rhino.PlaneClosestPoint(Plane, aLoc), aLoc)
+	Dim aTarg: aTarg = Rhino.PointAdd(aLoc, (Rhino.VectorScale(Vectarg, 2.0)))
+		MirrorPosition = Rhino.CopyObject(sObj, aLoc, aTarg)
+	Next
+	
+End Function
+
+
+Function MirrorAcrossPlane(aObj, Plane)
+	
+	Dim aXform:	aXform = Rhino.XformMirror(Plane(0), Plane(3))
+
+	MirrorAcrossPlane = Rhino.TransformObjects(aObj, aXform, True)
+	
+End Function
+
+	
+Function VerticalPlaneFrom2Pts()
+	
+	Dim aPts: aPts = Rhino.GetPoints(True, True, "First point for vertical plane", "Second point for vertical plane", 2)
+	If Not isArray(aPts) Then Exit Function
+	
+	Dim vecX: VecX = Rhino.VectorCreate(aPts(1), aPts(0))
+	Dim VecY: VecY = Rhino.ViewCPlane()(3)
+	VerticalPlaneFrom2Pts = Rhino.PlaneFromFrame(aPts(0), VecX, VecY)
+	
+	
+End Function
+
+
+Function PlaneFromSelection()
+	
+	Dim sObj: sObj = Rhino.GetObject("Select object to define plane", 4 + 8, False)
+	If isNull(sObj) Then Exit Function
+	
+	If Rhino.IsSurface(sObj) Then
+		Dim aParam:	aparam = MidParam(sObj)
+		Dim aPt: aPt = Rhino.EvaluateSurface(sObj, aparam)	
+		PlaneFromSelection = Rhino.PlaneFromNormal(apt, Rhino.SurfaceNormal(sObj, aparam))
+		
+	Else
+		Dim plane: Plane = Rhino.CurvePlane(sObj)
+		If Not isNull(Plane) Then
+			PlaneFromSelection = plane
+			Exit Function
+		End If
+		
+		PlaneFromSelection = PlaneFromCurve(sObj)
+		
+	End If
+	
+End Function
+
+
+Function PlaneFromCurve(sCrv)
+	
+	Dim apts: aPts = rhino.DivideCurve(sCrv, 32, False)
+	If Not isArray(aPts) Then Exit Function
+	PlaneFromCurve = Rhino.PlaneFitFromPoints(aPts)
+	
+End Function
+	
+
+Function Plane3Pt()
+		
+	Dim aPts: aPts = Rhino.GetPoints(True, False, "First point for vertical plane", "Next point for plane", 3)
+	If Not isArray(aPts) Then Exit Function
+	If Ubound(aPts) <> 2 Then Exit Function
+	Dim vecX: VecX = Rhino.VectorCreate(aPts(1), aPts(0))
+	Dim VecY: VecY = Rhino.VectorCreate(aPts(2), aPts(0))
+	Plane3Pt = Rhino.PlaneFromFrame(aPts(0), VecX, VecY)
+	
+End Function
+
+Function GetNamedCplane()
+	
+	Dim sCplane: sCplane = Rhino.ListBox(Rhino.NamedCplanes(), "Select mirror plane", "Named CPlanes")
+	If isNull(sCplane) Then Exit Function
+	GetNamedCplane = Rhino.NamedCPlane(sCplane)
+	
+End Function
+
+Function MidParam(sSrf)
+	'find the midlle parameter pair of a surface
+	Dim uDom,VDom
+	
+	UDom = Rhino.SurfaceDomain(sSrf, 0)
+	VDom = Rhino.SurfaceDomain(sSrf, 1)
+	
+	Dim Umid, VMid
+	
+	UMid = UDom(0) + (0.5 * (UDom(1) - Udom(0)))
+	
+	VMid = VDom(0) + (0.5 * (VDom(1) - Vdom(0)))
+	
+	MidParam = array(UMid, Vmid)
+	
+End Function
+
+Function WhereInArray(item, arr, intCase)
+	'if the result is -1 then the item does not
+	'appear in tha array
+	'intCase:  0 = non case-sensitive,1 = case sensitive
+	
+	Dim sItem, n, i
+	n = False
+	WhereInArray = -1
+
+		
+	For i = 0 To UBound(arr)
+			
+		If intCase = 1 Then
+			If arr(i) = Item Then
+				
+				WhereInArray = i
+				n = True
+				Exit For
+		
+				
+			End If
+			
+		Else 
+			
+			If LCase(arr(i)) = LCase(Item) Then
+				
+				WhereInArray = i
+				n = True
+				Exit For
+	
+			End If
+			
+		End If
+			
+	Next
+	
+
+	If n = False Then WhereInArray = -1
+	
+End Function
+
+
+Function BBCentroid (arrObj)
+	
+	Dim arrCent, First, Scnd
+	Dim X1,X2,Y1,Y2,Z1,Z2
+
+	'find the bounding box of the objects	
+	Dim arrBB : arrBB = Rhino.BoundingBox(arrObj, Rhino.CurrentView)
+	
+	First = arrBB(0)'Opposite corners of the BB
+	Scnd = arrBB(6)
+  
+	'break out each coordinate of the corner locations
+	X1 = First(0)
+	Y1 = First(1)
+	Z1 = First(2)
+	X2 = Scnd(0)
+	Y2 = Scnd(1)
+	Z2 = Scnd(2)
+
+	'bounding box centroid
+	arrCent = Array(.5*(X1+X2), .5 * (Y1 + Y2), .5*(Z1+Z2))
+	
+	BBCentroid = arrCent
+
+End Function

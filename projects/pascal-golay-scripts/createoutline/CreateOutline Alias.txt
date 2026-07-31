@@ -1,0 +1,5 @@
+CreateOutline Script aliases-
+
+Drag and drop the rvb file over an open Rhino window to register these aliases:
+
+CreateOutline - automatically finds the outer perimeter curve of a set of curves. (basically a  quick version of CurveBoolean)

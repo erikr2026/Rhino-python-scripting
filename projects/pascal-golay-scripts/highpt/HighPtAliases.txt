@@ -1,0 +1,6 @@
+HightPt Script aliases-
+
+Drag and drop the rvb file over an open Rhino window to register these aliases:
+
+HighPt- finds the highest point near a user defined (click) location on a surface.
+LowPt - as above, the lowest point.
