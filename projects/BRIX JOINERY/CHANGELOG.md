@@ -90,3 +90,51 @@ to need real-world correction on first run:
   but the very first real run should visually confirm the cap actually
   lands centered on S2's edge and bulges the correct direction (away from
   the open end, into the panel) before trusting it on production parts.
+
+## Fix: polysurface support (2026-08-06, same day)
+
+First real-Rhino run immediately hit a hard failure: both sets were
+restricted to single-face Breps, and the owner's actual 2nd-set objects
+are polysurfaces (2 faces) — every 2nd-set surface got skipped, aborting
+the whole run. The "zero-thickness surfaces" requirement never meant
+single-face only; that restriction was an unnecessary narrowing of the
+original algorithm design, not something the owner asked for.
+
+Reworked the core geometry to support single-face or multi-face Breps on
+both sets:
+- `Intersection.SurfaceSurface(face, face, ...)` (looped per S1-face ×
+  S2-face pair) replaced with a single `Intersection.BrepBrep(brep1,
+  brep2, tolerance)` call per S1/S2 pair — intersects across every face of
+  both Breps at once, confirmed via live docs to have the identical
+  `(bool, Curve[], Point3d[])` return shape as `SurfaceSurface`.
+- New `face_and_plane_for_curve()` matches each resulting intersection
+  curve back to the specific S1 face it actually lies on, via
+  `Brep.ClosestPoint(midpoint, 0.0)` → `ComponentIndex` → that face's
+  `TryGetPlane()`. Necessary because a polysurface's faces can sit in
+  different planes — the slot outline has to be built in the plane of the
+  face it actually crosses, not one plane assumed for the whole S1
+  object. Confirmed via live docs: `maximumDistance <= 0` means
+  unlimited-range search (not zero-range), and `ci.ComponentIndexType`
+  can come back `BrepEdge` as well as `BrepFace` (a curve landing exactly
+  on a seam) — that case is treated as a skip-with-warning, not a crash.
+- The single-face `BrepFace.Split(curves, tolerance)` + per-face-index
+  removal loop from the first draft is gone entirely, replaced by a
+  whole-Brep `Brep.Split(curves, tolerance)` (confirmed via live docs:
+  returns `Brep[]` piece array, not a single Brep) done ONCE per S1 across
+  all its faces and all its slot outlines together. This sidesteps a real
+  problem the per-face approach would have hit on a polysurface needing
+  cuts on more than one face: splitting face 0 first would shift face 1's
+  index in the result, corrupting a second sequential per-face split.
+  Piece classification (keep vs. discard-as-slot-hole) now checks each
+  piece's centroid against every outline's own stored plane (each outline
+  now carries the plane it was built in, since different outlines on the
+  same S1 can belong to different faces), and multiple surviving material
+  pieces are rejoined with `Brep.JoinBreps` (confirmed via live docs: a
+  2-arg `(breps, tolerance)` overload exists, no `angleTolerance` required).
+
+Still **NOT TESTED AGAINST LIVE RHINO GEOMETRY** — same caveat as above,
+now also covering the new `Brep.ClosestPoint`/whole-Brep-`Split`/
+`JoinBreps` calls specifically. The face-matching step
+(`face_and_plane_for_curve`) is the newest, least-exercised part of the
+algorithm and the first thing to check if a polysurface run behaves
+unexpectedly.

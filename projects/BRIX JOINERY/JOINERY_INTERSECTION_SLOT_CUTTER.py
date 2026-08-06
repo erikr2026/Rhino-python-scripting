@@ -13,6 +13,15 @@ where the 2nd-set panel actually crosses it. If a 2nd-set panel passes
 fully through a 1st-set panel (enters and exits through two boundary
 edges), a straight full-width channel is cut instead - no semicircle.
 
+Both sets may be single surfaces OR polysurfaces (multi-face Breps) - each
+S1/S2 pair is intersected as whole Breps (Intersection.BrepBrep), and each
+resulting intersection curve is matched back to the specific S1 face it
+lies on (Brep.ClosestPoint) so the slot outline is built in that face's own
+plane. The final cut is a single whole-Brep split (Brep.Split(curves,
+tolerance)) across all of S1's faces at once, not a per-face split - this
+sidesteps face-index reshuffling when a polysurface needs more than one
+face cut.
+
 Workflow: select 1st-set surfaces, then 2nd-set (cutting) surfaces, then
 enter the 2nd-set material thickness. Slot width = thickness + 1/16"
 oversize (converted to the document's model unit system, not hardcoded
@@ -23,21 +32,21 @@ Engine: Python 3 (CPython, via ScriptEditor / F5) or IronPython 2
 and no non-ASCII source bytes, so it runs unmodified under both. Written
 for Rhino 8/9's CPython bridge; every RhinoCommon call below (in
 particular the out/ref-parameter tuple returns from
-Intersection.SurfaceSurface, Curve.JoinCurves, and
-Rhino.Input.RhinoGet.GetNumber, plus BrepFace.Split's return-a-new-Brep
-behavior and Curve.Contains returning a PointContainment enum rather than
-a bool) was checked against a live pull of developer.rhino3d.com's
-RhinoCommon API JSON data source this session - not against a running
-Rhino instance, since no Rhino install is available in this authoring
-environment.
+Intersection.BrepBrep, Brep.ClosestPoint, Curve.JoinCurves, and
+Rhino.Input.RhinoGet.GetNumber, plus Brep.Split's array-of-pieces return
+and Curve.Contains returning a PointContainment enum rather than a bool)
+was checked against a live pull of developer.rhino3d.com's RhinoCommon
+API JSON data source this session - not against a running Rhino instance,
+since no Rhino install is available in this authoring environment.
 
 *** NOT TESTED AGAINST LIVE RHINO GEOMETRY. ***
 This script has only been checked for Python syntax validity and API
 signatures against live docs - it has never been run inside Rhino. See
 this project's CHANGELOG.md for the specific parts most likely to need
-real-world correction: the Brep.Faces[0].Split() / face-removal pass
-(step 7 of the algorithm) and the ray-cast boundary-crossing search used
-when neither end of an intersection curve starts near a naked edge.
+real-world correction: the Brep.Split() / piece-removal pass (step 7 of
+the algorithm), the Brep.ClosestPoint face-matching for multi-face
+polysurfaces, and the ray-cast boundary-crossing search used when neither
+end of an intersection curve starts near a naked edge.
 """
 
 import Rhino
@@ -73,9 +82,10 @@ EDGE_OVERSHOOT_MULTIPLE = 10.0
 
 
 def prompt_for_surfaces(prompt_text, exclude_ids=None):
-    """Prompt for one or more whole Surface/single-face-Brep objects.
-    Returns a list of (Guid, RhinoObject) tuples, or an empty list if the
-    user cancelled or picked nothing usable."""
+    """Prompt for one or more whole Surface/Brep objects (single-face or
+    polysurface - either is fine). Returns a list of (Guid, RhinoObject)
+    tuples, or an empty list if the user cancelled or picked nothing
+    usable."""
 
     exclude_ids = exclude_ids or set()
 
@@ -118,16 +128,13 @@ def prompt_for_surfaces(prompt_text, exclude_ids=None):
     return picked
 
 
-def geometry_to_single_face_brep(rh_obj):
-    """Convert a selected RhinoObject's geometry to a single-face Brep, or
-    return None if it isn't a zero-thickness Surface/single-face Brep."""
+def geometry_to_brep(rh_obj):
+    """Convert a selected RhinoObject's geometry to a Brep (single-face or
+    polysurface, either is fine), or return None if it isn't a
+    zero-thickness Surface/Brep."""
 
     geom = rh_obj.Geometry
     if isinstance(geom, rg.Brep):
-        if geom.Faces.Count != 1:
-            print("Skipped '{0}' - not a single-face Brep (has {1} faces).".format(
-                rh_obj.Name or str(rh_obj.Id), geom.Faces.Count))
-            return None
         return geom.DuplicateBrep()
     if isinstance(geom, rg.Surface):
         return geom.ToBrep()
@@ -260,6 +267,32 @@ def build_full_channel_outline(open_pt_a, open_pt_b, plane_normal, half_width, e
     return joined[0]
 
 
+def face_and_plane_for_curve(brep, curve, tolerance, label):
+    """Find which face of `brep` an intersection curve actually lies on
+    (by its midpoint) and that face's plane. Returns (face_index, Plane),
+    or (None, None) with a printed warning if the face can't be matched or
+    isn't planar.
+
+    Needed because a polysurface's faces can have different planes - the
+    slot outline for a given intersection curve has to be built in the
+    plane of the specific face it crosses, not some single plane for the
+    whole S1 object."""
+
+    mid_pt = curve.PointAtNormalizedLength(0.5)
+    ok, closest_pt, ci, s, t, normal = brep.ClosestPoint(mid_pt, 0.0)
+    if not ok or ci.ComponentIndexType != rg.ComponentIndexType.BrepFace:
+        print("  Skipped an intersection on {0} - could not match it to a single planar face.".format(label))
+        return None, None
+
+    face = brep.Faces[ci.Index]
+    plane_ok, plane = face.TryGetPlane(tolerance)
+    if not plane_ok:
+        print("  Skipped an intersection on {0} - the face it crosses is not planar.".format(label))
+        return None, None
+
+    return ci.Index, plane
+
+
 def outlines_for_intersection_curve(curve, naked_curves, snap_tol, edge_overshoot,
                                      plane_normal, half_width, join_tolerance,
                                      search_length, tolerance, label):
@@ -356,26 +389,29 @@ def main():
     slot_width = thickness + oversize
     half_width = slot_width / 2.0
 
-    # Build single-face Brep working copies up front, keyed by object id.
+    # Build Brep working copies up front, keyed by object id. Either
+    # single-face or polysurface Breps are accepted for both sets.
     set1_breps = {}
     for obj_id, rh_obj in set1_picked:
-        brep = geometry_to_single_face_brep(rh_obj)
+        brep = geometry_to_brep(rh_obj)
         if brep is None:
+            print("Skipped '{0}' - not a Surface or Brep object.".format(rh_obj.Name or str(obj_id)))
             continue
         set1_breps[obj_id] = (rh_obj, brep)
 
     set2_breps = {}
     for obj_id, rh_obj in set2_picked:
-        brep = geometry_to_single_face_brep(rh_obj)
+        brep = geometry_to_brep(rh_obj)
         if brep is None:
+            print("Skipped '{0}' - not a Surface or Brep object.".format(rh_obj.Name or str(obj_id)))
             continue
         set2_breps[obj_id] = (rh_obj, brep)
 
     if not set1_breps:
-        print("No usable 1st-set surfaces (single-face Brep or Surface objects). Aborting.")
+        print("No usable 1st-set surfaces (Surface or Brep objects). Aborting.")
         return
     if not set2_breps:
-        print("No usable 2nd-set surfaces (single-face Brep or Surface objects). Aborting.")
+        print("No usable 2nd-set surfaces (Surface or Brep objects). Aborting.")
         return
 
     undo_record = sc.doc.BeginUndoRecord("BRIX Joinery - Cut Intersection Slots")
@@ -388,12 +424,6 @@ def main():
         for obj_id, (rh_obj, brep1) in set1_breps.items():
             label = rh_obj.Name or str(obj_id)
 
-            face1 = brep1.Faces[0]
-            ok, plane = face1.TryGetPlane(tolerance)
-            if not ok:
-                print("Skipped '{0}' - surface is not planar.".format(label))
-                continue
-
             naked_curves = brep1.DuplicateNakedEdgeCurves(True, False)
             if not naked_curves:
                 print("Skipped '{0}' - no boundary (naked) edges found.".format(label))
@@ -403,52 +433,70 @@ def main():
             if search_length < tolerance:
                 search_length = 1.0
 
+            # (outline curve, plane it was built in) pairs, across every
+            # face of S1 and every S2 it intersects.
             all_outlines = []
 
             for obj_id2, (rh_obj2, brep2) in set2_breps.items():
-                face2 = brep2.Faces[0]
-
-                success, curves, points = Intersection.SurfaceSurface(face1, face2, tolerance)
+                success, curves, points = Intersection.BrepBrep(brep1, brep2, tolerance)
                 if not success or not curves:
                     continue
 
                 for curve in curves:
+                    face_idx, plane = face_and_plane_for_curve(brep1, curve, tolerance, label)
+                    if plane is None:
+                        continue
+
                     outline = outlines_for_intersection_curve(
                         curve, naked_curves, snap_tol, edge_overshoot,
                         plane.Normal, half_width, tolerance, search_length,
                         tolerance, label)
                     if outline is not None:
-                        all_outlines.append(outline)
+                        all_outlines.append((outline, plane))
 
             if not all_outlines:
                 continue
 
-            split_result = face1.Split(all_outlines, tolerance)
-            if split_result is None:
+            outline_curves = [pair[0] for pair in all_outlines]
+            pieces = brep1.Split(outline_curves, tolerance)
+            if not pieces:
                 print("Skipped '{0}' - Split() failed to produce a result.".format(label))
                 continue
 
-            faces_to_remove = []
-            for face_idx in range(split_result.Faces.Count):
-                amp = rg.AreaMassProperties.Compute(split_result.Faces[face_idx])
+            kept_pieces = []
+            for piece in pieces:
+                amp = rg.AreaMassProperties.Compute(piece)
                 if amp is None:
+                    kept_pieces.append(piece)
                     continue
                 centroid = amp.Centroid
-                for outline in all_outlines:
-                    containment = outline.Contains(centroid, plane, tolerance)
-                    if containment == rg.PointContainment.Inside:
-                        faces_to_remove.append(face_idx)
+
+                is_slot_piece = False
+                for outline, plane in all_outlines:
+                    if outline.Contains(centroid, plane, tolerance) == rg.PointContainment.Inside:
+                        is_slot_piece = True
                         break
 
-            for face_idx in sorted(faces_to_remove, reverse=True):
-                split_result.Faces.RemoveAt(face_idx)
-            split_result.Compact()
+                if not is_slot_piece:
+                    kept_pieces.append(piece)
 
-            if split_result.Faces.Count == 0:
+            if not kept_pieces:
                 print("Skipped replacing '{0}' - slot removal left no material.".format(label))
                 continue
 
-            if sc.doc.Objects.Replace(obj_id, split_result):
+            if len(kept_pieces) == 1:
+                result_brep = kept_pieces[0]
+            else:
+                joined = rg.Brep.JoinBreps(kept_pieces, tolerance)
+                if not joined:
+                    print("Skipped replacing '{0}' - could not rejoin remaining material pieces.".format(label))
+                    continue
+                result_brep = joined[0]
+                if len(joined) > 1:
+                    print("  Warning: slots on '{0}' split it into {1} disconnected pieces; keeping only the first.".format(
+                        label, len(joined)))
+
+            if sc.doc.Objects.Replace(obj_id, result_brep):
                 surfaces_modified += 1
                 total_slots += len(all_outlines)
             else:
