@@ -1,5 +1,7 @@
 # offset-parallel-lines
 
+**Status: WIP** — the owner is testing/tweaking this in Rhino on their PC. The version here may lag behind local changes; check with the owner before assuming this copy is current.
+
 Moves two selected parallel lines apart from each other by a settable distance.
 
 ## What it does
