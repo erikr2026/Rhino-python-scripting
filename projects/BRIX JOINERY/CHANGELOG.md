@@ -34,3 +34,13 @@ higher-versioned file; originals are untouched.
   pass. Left exactly as-is per the no-behavior-change rule for this pass,
   with an inline comment flagging it — **worth confirming with whoever
   runs this script whether the double invocation is intentional.**
+
+
+## Note: JOINERY_INTERSECTION_SLOT_CUTTER.py moved to BRIX MODELING (2026-08-06)
+
+This script (and its full changelog history — the "New:"/"Fix:" entries
+that used to follow this line) was developed here, then moved to
+`projects/BRIX MODELING/` at the owner's request once confirmed working.
+See that folder's `CHANGELOG.md` for the complete development history —
+polysurface support, the opening-sliver and cap-pullback fixes, and the
+rathole cutout feature.

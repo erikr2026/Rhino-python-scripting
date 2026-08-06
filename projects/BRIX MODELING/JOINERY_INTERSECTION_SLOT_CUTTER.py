@@ -1,0 +1,635 @@
+# -*- coding: utf-8 -*-
+
+"""
+Rhino Python Script (Rhino 8 & 9)
+BRIX JOINERY - Intersection Slot Cutter.
+
+Cuts notch/dado slots into a first set of zero-thickness surfaces ("1st
+set"), sized to receive a second set of zero-thickness "cutting" surfaces
+("2nd set") that pass through them. Standard BRIX flat-panel joinery: each
+1st-set panel gets a slot that opens at its nearest boundary edge and
+terminates inside the panel with a semicircular rounded end, pulled back
+from where the 2nd-set panel actually crosses it by half the 2nd-set
+material thickness. If a 2nd-set panel passes fully through a 1st-set
+panel (enters and exits through two boundary edges), a straight
+full-width channel is cut instead - no semicircle, no pullback.
+
+The slot's open end is overshot well past S1's actual boundary edge
+(scaled to the panel's own size, not a tiny fixed tolerance) before the
+final Brep.Split() call, since Split() trims the outline back to S1's
+true boundary anyway - a small fixed overshoot left a leftover sliver of
+material at the opening whenever the boundary edge wasn't exactly
+perpendicular to the slot direction (confirmed on the first real-Rhino
+run of the polysurface-support fix).
+
+Both sets may be single surfaces OR polysurfaces (multi-face Breps) - each
+S1/S2 pair is intersected as whole Breps (Intersection.BrepBrep), and each
+resulting intersection curve is matched back to the specific S1 face it
+lies on (Brep.ClosestPoint) so the slot outline is built in that face's own
+plane. The final cut is a single whole-Brep split (Brep.Split(curves,
+tolerance)) across all of S1's faces at once, not a per-face split - this
+sidesteps face-index reshuffling when a polysurface needs more than one
+face cut.
+
+Workflow: select 1st-set surfaces, then 2nd-set (cutting) surfaces, then
+enter the 2nd-set material thickness, then enter a rathole radius (0 to
+skip). Slot width = thickness + 1/16" oversize (converted to the
+document's model unit system, not hardcoded assuming inches).
+
+If a rathole radius > 0 is given, a full circle of that radius is also
+cut at every point where a slot opens onto S1's naked boundary edge -
+both open ends of a full-through channel, or the single open end of a
+capped slot - as stress/fabrication relief for the sharp interior corner
+a plain slot opening would otherwise leave. The circle is centered
+exactly on the boundary point; the half of it that falls outside S1's
+actual material is simply ignored by Brep.Split(), the same way the
+slot's own edge overshoot already relies on that trimming rather than
+precomputing the true boundary geometry.
+
+Engine: Python 3 (CPython, via ScriptEditor / F5) or IronPython 2
+(RunPythonScript) - this script uses no syntax specific to either engine
+and no non-ASCII source bytes, so it runs unmodified under both. Written
+for Rhino 8/9's CPython bridge; every RhinoCommon call below (in
+particular the out/ref-parameter tuple returns from
+Intersection.BrepBrep, Brep.ClosestPoint, Curve.JoinCurves, and
+Rhino.Input.RhinoGet.GetNumber, plus Brep.Split's array-of-pieces return
+and Curve.Contains returning a PointContainment enum rather than a bool)
+was checked against a live pull of developer.rhino3d.com's RhinoCommon
+API JSON data source this session - not against a running Rhino instance,
+since no Rhino install is available in this authoring environment.
+
+Confirmed working against real Rhino geometry (owner-run, 2026-08-06):
+core slot cutting (both capped and full-through cases), polysurface
+support on both sets, the opening-sliver and cap-pullback fixes, and the
+rathole cutout feature all produced correct results in real runs. See
+this project's CHANGELOG.md for the specific fixes each real run
+surfaced along the way. Not exhaustively tested - e.g. the ray-cast
+boundary-crossing path (used when neither intersection-curve endpoint
+starts near a naked edge) hasn't specifically been exercised yet, since
+the owner's runs so far always had at least one endpoint on the boundary.
+"""
+
+import System
+import Rhino
+import Rhino.Geometry as rg
+from Rhino.Geometry.Intersect import Intersection
+import rhinoscriptsyntax as rs
+import scriptcontext as sc
+
+
+# ---------------------------------------------------------------------------
+# Tunable constants
+# ---------------------------------------------------------------------------
+
+# 1/16" oversize on slot width, converted from inches to the document's
+# actual model unit system (never assume the document is in inches).
+OVERSIZE_INCHES = 1.0 / 16.0
+
+# Default 2nd-set material thickness offered in the number prompt (inches
+# worth of "quarter inch ply" is a common BRIX default; converted below).
+DEFAULT_THICKNESS_INCHES = 0.25
+
+# How many multiples of the document's absolute tolerance an intersection
+# curve endpoint must be within to be treated as "already on the boundary"
+# rather than needing a ray-cast extension. Not verified against real
+# fabrication geometry - a development placeholder like the ones flagged
+# in this repo's other BRIX scripts.
+BOUNDARY_SNAP_MULTIPLE = 25.0
+
+# Default rathole cutout radius offered in the number prompt. A rathole is
+# a full circle cut at every point where a slot's open end meets S1's
+# naked boundary edge - stress/fabrication relief for the sharp interior
+# corner a plain slot opening would otherwise leave (owner-requested
+# add-on, 2026-08-06).
+DEFAULT_RATHOLE_RADIUS_INCHES = 1.0
+
+
+def prompt_for_surfaces(prompt_text, exclude_ids=None):
+    """Prompt for one or more whole Surface/Brep objects (single-face or
+    polysurface - either is fine). Returns a list of (Guid, RhinoObject)
+    tuples, or an empty list if the user cancelled or picked nothing
+    usable."""
+
+    exclude_ids = exclude_ids or set()
+
+    go = Rhino.Input.Custom.GetObject()
+    go.SetCommandPrompt(prompt_text)
+    go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface | Rhino.DocObjects.ObjectType.Brep
+    go.SubObjectSelect = False
+    go.EnablePreSelect(True, True)
+    go.GetMultiple(1, 0)
+
+    if go.CommandResult() != Rhino.Commands.Result.Success:
+        print("Selection cancelled.")
+        return []
+
+    obj_refs = go.Objects()
+    if not obj_refs:
+        print("No surfaces selected.")
+        return []
+
+    picked = []
+    seen = set()
+    skipped_excluded = 0
+    for ref in obj_refs:
+        rh_obj = ref.Object()
+        if not rh_obj:
+            continue
+        obj_id = rh_obj.Id
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        if obj_id in exclude_ids:
+            skipped_excluded += 1
+            continue
+        picked.append((obj_id, rh_obj))
+
+    if skipped_excluded:
+        print("Skipped {0} object(s) already used in the 1st-set selection.".format(skipped_excluded))
+
+    sc.doc.Objects.UnselectAll()
+    return picked
+
+
+def geometry_to_brep(rh_obj):
+    """Convert a selected RhinoObject's geometry to a Brep (single-face or
+    polysurface, either is fine), or return None if it isn't a
+    zero-thickness Surface/Brep."""
+
+    geom = rh_obj.Geometry
+    if isinstance(geom, rg.Brep):
+        return geom.DuplicateBrep()
+    if isinstance(geom, rg.Surface):
+        return geom.ToBrep()
+    return None
+
+
+def get_boundary_proximity(point, naked_curves):
+    """Return (min_distance, closest_point_on_boundary) of `point` against
+    the naked boundary curves, or (None, None) if there are none."""
+
+    best_dist = None
+    best_pt = None
+    for nc in naked_curves:
+        ok, t = nc.ClosestPoint(point)
+        if not ok:
+            continue
+        cp = nc.PointAt(t)
+        d = point.DistanceTo(cp)
+        if best_dist is None or d < best_dist:
+            best_dist = d
+            best_pt = cp
+    return best_dist, best_pt
+
+
+def find_boundary_crossing(near_point, far_point, naked_curves, search_length, tolerance):
+    """Cast a ray from far_point through near_point and beyond by
+    search_length; return the boundary-curve crossing point nearest to
+    near_point, or None if no crossing is found.
+
+    This is the least-verified part of the algorithm's geometry - see the
+    module docstring / CHANGELOG for the flag."""
+
+    direction = near_point - far_point
+    if direction.Length < tolerance:
+        return None
+    direction.Unitize()
+
+    ray_end = near_point + direction * search_length
+    line_curve = rg.LineCurve(far_point, ray_end)
+
+    best_pt = None
+    best_dist = None
+    for nc in naked_curves:
+        events = Intersection.CurveCurve(line_curve, nc, tolerance, tolerance)
+        if events is None or events.Count == 0:
+            continue
+        for ev in events:
+            if not ev.IsPoint:
+                continue
+            pt = ev.PointA
+            d = pt.DistanceTo(near_point)
+            if best_dist is None or d < best_dist:
+                best_dist = d
+                best_pt = pt
+
+    return best_pt
+
+
+def build_capped_outline(open_pt, interior_pt, plane_normal, half_width, edge_overshoot,
+                          join_tolerance, cap_pullback=0.0):
+    """Build the closed slot outline for a slot that opens at `open_pt` on
+    the boundary and terminates inside the panel at `interior_pt` with a
+    semicircular cap. Returns a closed Curve, or None on failure.
+
+    `cap_pullback`, if given, shortens the slot by pulling the capped end
+    back toward `open_pt` by that distance (e.g. half the 2nd-set material
+    thickness) - clamped so the slot never inverts (always keeps at least
+    `join_tolerance` of length)."""
+
+    raw_forward = interior_pt - open_pt
+    raw_length = raw_forward.Length
+    if raw_length < join_tolerance:
+        return None
+    forward = rg.Vector3d(raw_forward)
+    forward.Unitize()
+
+    if cap_pullback > 0.0:
+        effective_pullback = min(cap_pullback, max(raw_length - join_tolerance, 0.0))
+        interior_pt = interior_pt - forward * effective_pullback
+
+    perp = rg.Vector3d.CrossProduct(plane_normal, forward)
+    if perp.Length < 1e-9:
+        return None
+    perp.Unitize()
+
+    ext_open = open_pt - forward * edge_overshoot
+
+    side1_start = ext_open + perp * half_width
+    side1_end = interior_pt + perp * half_width
+    side2_start = ext_open - perp * half_width
+    side2_end = interior_pt - perp * half_width
+
+    try:
+        seg1 = rg.LineCurve(side1_start, side1_end)
+        cap_arc = rg.Arc(side1_end, forward, side2_end)
+        seg2 = rg.ArcCurve(cap_arc)
+        seg3 = rg.LineCurve(side2_end, side2_start)
+        seg4 = rg.LineCurve(side2_start, side1_start)
+    except Exception:
+        return None
+
+    joined = rg.Curve.JoinCurves([seg1, seg2, seg3, seg4], join_tolerance)
+    if not joined or len(joined) != 1 or not joined[0].IsClosed:
+        return None
+    return joined[0]
+
+
+def build_full_channel_outline(open_pt_a, open_pt_b, plane_normal, half_width, edge_overshoot, join_tolerance):
+    """Build the closed slot outline for a slot where the 2nd-set surface
+    passes fully through the 1st-set panel (both ends open on the
+    boundary) - a straight full-width channel, no semicircular cap."""
+
+    forward = open_pt_b - open_pt_a
+    if forward.Length < join_tolerance:
+        return None
+    forward.Unitize()
+
+    perp = rg.Vector3d.CrossProduct(plane_normal, forward)
+    if perp.Length < 1e-9:
+        return None
+    perp.Unitize()
+
+    ext_a = open_pt_a - forward * edge_overshoot
+    ext_b = open_pt_b + forward * edge_overshoot
+
+    side1_a = ext_a + perp * half_width
+    side1_b = ext_b + perp * half_width
+    side2_a = ext_a - perp * half_width
+    side2_b = ext_b - perp * half_width
+
+    try:
+        seg1 = rg.LineCurve(side1_a, side1_b)
+        seg2 = rg.LineCurve(side1_b, side2_b)
+        seg3 = rg.LineCurve(side2_b, side2_a)
+        seg4 = rg.LineCurve(side2_a, side1_a)
+    except Exception:
+        return None
+
+    joined = rg.Curve.JoinCurves([seg1, seg2, seg3, seg4], join_tolerance)
+    if not joined or len(joined) != 1 or not joined[0].IsClosed:
+        return None
+    return joined[0]
+
+
+def build_rathole_circle(center_pt, plane_normal, radius, tolerance):
+    """Build a full circle of `radius`, centered exactly at `center_pt`
+    (a point on S1's naked boundary edge), in the plane defined by
+    `plane_normal`. Returns a closed Curve, or None if `radius` is zero/
+    negative or construction fails.
+
+    The center sits ON the boundary by design - the outward half of the
+    circle falls outside S1's actual material and is simply ignored when
+    Brep.Split() trims it, the same way the slot's own edge overshoot
+    already relies on Split()'s trimming rather than precomputing exactly
+    where the true boundary is."""
+
+    if radius <= 0.0:
+        return None
+
+    try:
+        circle_plane = rg.Plane(center_pt, plane_normal)
+        circle = rg.Circle(circle_plane, radius)
+        curve = circle.ToNurbsCurve()
+    except Exception:
+        return None
+
+    if curve is None or not curve.IsClosed:
+        return None
+    return curve
+
+
+def face_and_plane_for_curve(brep, curve, tolerance, label):
+    """Find which face of `brep` an intersection curve actually lies on
+    (by its midpoint) and that face's plane. Returns (face_index, Plane),
+    or (None, None) with a printed warning if the face can't be matched or
+    isn't planar.
+
+    Needed because a polysurface's faces can have different planes - the
+    slot outline for a given intersection curve has to be built in the
+    plane of the specific face it crosses, not some single plane for the
+    whole S1 object."""
+
+    mid_pt = curve.PointAtNormalizedLength(0.5)
+    ok, closest_pt, ci, s, t, normal = brep.ClosestPoint(mid_pt, 0.0)
+    if not ok or ci.ComponentIndexType != rg.ComponentIndexType.BrepFace:
+        print("  Skipped an intersection on {0} - could not match it to a single planar face.".format(label))
+        return None, None
+
+    face = brep.Faces[ci.Index]
+    plane_ok, plane = face.TryGetPlane(tolerance)
+    if not plane_ok:
+        print("  Skipped an intersection on {0} - the face it crosses is not planar.".format(label))
+        return None, None
+
+    return ci.Index, plane
+
+
+def outlines_for_intersection_curve(curve, naked_curves, snap_tol, edge_overshoot,
+                                     plane_normal, half_width, join_tolerance,
+                                     search_length, tolerance, label, cap_pullback=0.0,
+                                     rathole_radius=0.0):
+    """Classify one S1/S2 intersection curve's endpoints against S1's
+    boundary and build the resulting cutout(s). Returns a list of
+    (Curve, kind) pairs - kind is "slot" or "rathole" - or an empty list
+    with a printed warning if nothing could be built.
+
+    `cap_pullback` only affects capped (semicircular-end) outlines - a
+    full-through channel has no cap to pull back, so it's ignored there.
+    `rathole_radius` (if > 0) adds a full circle at every open end where
+    the slot meets S1's boundary - both open ends for a full-through
+    channel, the single open end for a capped slot."""
+
+    def finish(outline, open_pts):
+        if outline is None:
+            return []
+        result = [(outline, "slot")]
+        for pt in open_pts:
+            rathole = build_rathole_circle(pt, plane_normal, rathole_radius, tolerance)
+            if rathole is not None:
+                result.append((rathole, "rathole"))
+        return result
+
+    if curve.GetLength() < tolerance:
+        print("  Skipped a degenerate (near-zero-length) intersection on {0}.".format(label))
+        return []
+
+    p_start = curve.PointAtStart
+    p_end = curve.PointAtEnd
+
+    dist_start, proj_start = get_boundary_proximity(p_start, naked_curves)
+    dist_end, proj_end = get_boundary_proximity(p_end, naked_curves)
+
+    start_near = dist_start is not None and dist_start <= snap_tol
+    end_near = dist_end is not None and dist_end <= snap_tol
+
+    if start_near and end_near:
+        # 2nd-set surface passes fully through S1 - full-width channel, no
+        # cap, so cap_pullback doesn't apply here. Both ends are open.
+        outline = build_full_channel_outline(proj_start, proj_end, plane_normal,
+                                              half_width, edge_overshoot, join_tolerance)
+        return finish(outline, (proj_start, proj_end))
+
+    if start_near and not end_near:
+        outline = build_capped_outline(proj_start, p_end, plane_normal,
+                                        half_width, edge_overshoot, join_tolerance, cap_pullback)
+        return finish(outline, (proj_start,))
+
+    if end_near and not start_near:
+        outline = build_capped_outline(proj_end, p_start, plane_normal,
+                                        half_width, edge_overshoot, join_tolerance, cap_pullback)
+        return finish(outline, (proj_end,))
+
+    # Neither endpoint is near a boundary - extend from whichever end is
+    # closer to one, ray-casting out to find the true boundary crossing.
+    if dist_start is None and dist_end is None:
+        print("  Skipped an intersection on {0} - S1 has no boundary edges to reference.".format(label))
+        return []
+
+    if dist_start is None:
+        near_pt, far_pt = p_end, p_start
+    elif dist_end is None:
+        near_pt, far_pt = p_start, p_end
+    elif dist_start <= dist_end:
+        near_pt, far_pt = p_start, p_end
+    else:
+        near_pt, far_pt = p_end, p_start
+
+    open_pt = find_boundary_crossing(near_pt, far_pt, naked_curves, search_length, tolerance)
+    if open_pt is None:
+        print("  Skipped an intersection on {0} - could not ray-cast to a boundary edge.".format(label))
+        return []
+
+    outline = build_capped_outline(open_pt, far_pt, plane_normal, half_width, edge_overshoot,
+                                    join_tolerance, cap_pullback)
+    return finish(outline, (open_pt,))
+
+
+def main():
+    """Select 1st-set surfaces, then 2nd-set cutting surfaces, prompt for
+    2nd-set thickness, and cut intersection slots into every 1st-set
+    surface in a single undo step."""
+
+    tolerance = sc.doc.ModelAbsoluteTolerance
+    if tolerance <= 0:
+        print("Document absolute tolerance is not set to a positive value. Aborting.")
+        return
+
+    snap_tol = tolerance * BOUNDARY_SNAP_MULTIPLE
+
+    set1_picked = prompt_for_surfaces("Select 1st-set surfaces (get cutouts)")
+    if not set1_picked:
+        return
+
+    set1_ids = set(obj_id for obj_id, _ in set1_picked)
+
+    set2_picked = prompt_for_surfaces("Select 2nd-set cutting surfaces", exclude_ids=set1_ids)
+    if not set2_picked:
+        return
+
+    unit_scale = Rhino.RhinoMath.UnitScale(Rhino.UnitSystem.Inches, sc.doc.ModelUnitSystem)
+    default_thickness = DEFAULT_THICKNESS_INCHES * unit_scale
+
+    thickness = default_thickness
+    rc, thickness = Rhino.Input.RhinoGet.GetNumber(
+        "2nd-set material thickness", False, thickness, 1e-6, 1e6)
+    if rc != Rhino.Commands.Result.Success:
+        print("Thickness entry cancelled.")
+        return
+    if thickness <= 0:
+        print("Thickness must be a positive value. Aborting.")
+        return
+
+    oversize = OVERSIZE_INCHES * unit_scale
+    slot_width = thickness + oversize
+    half_width = slot_width / 2.0
+
+    # Pull the capped (interior) end of every slot back toward the open
+    # edge by half the 2nd-set material thickness.
+    cap_pullback = thickness / 2.0
+
+    default_rathole_radius = DEFAULT_RATHOLE_RADIUS_INCHES * unit_scale
+    rathole_radius = default_rathole_radius
+    rc, rathole_radius = Rhino.Input.RhinoGet.GetNumber(
+        "Rathole radius at slot openings (0 = none)", False, rathole_radius, 0.0, 1e6)
+    if rc != Rhino.Commands.Result.Success:
+        print("Rathole radius entry cancelled.")
+        return
+    if rathole_radius < 0.0:
+        rathole_radius = 0.0
+
+    # Build Brep working copies up front, keyed by object id. Either
+    # single-face or polysurface Breps are accepted for both sets.
+    set1_breps = {}
+    for obj_id, rh_obj in set1_picked:
+        brep = geometry_to_brep(rh_obj)
+        if brep is None:
+            print("Skipped '{0}' - not a Surface or Brep object.".format(rh_obj.Name or str(obj_id)))
+            continue
+        set1_breps[obj_id] = (rh_obj, brep)
+
+    set2_breps = {}
+    for obj_id, rh_obj in set2_picked:
+        brep = geometry_to_brep(rh_obj)
+        if brep is None:
+            print("Skipped '{0}' - not a Surface or Brep object.".format(rh_obj.Name or str(obj_id)))
+            continue
+        set2_breps[obj_id] = (rh_obj, brep)
+
+    if not set1_breps:
+        print("No usable 1st-set surfaces (Surface or Brep objects). Aborting.")
+        return
+    if not set2_breps:
+        print("No usable 2nd-set surfaces (Surface or Brep objects). Aborting.")
+        return
+
+    undo_record = sc.doc.BeginUndoRecord("BRIX Joinery - Cut Intersection Slots")
+    rs.EnableRedraw(False)
+
+    total_slots = 0
+    total_ratholes = 0
+    surfaces_modified = 0
+
+    try:
+        for obj_id, (rh_obj, brep1) in set1_breps.items():
+            label = rh_obj.Name or str(obj_id)
+
+            naked_curves = brep1.DuplicateNakedEdgeCurves(True, False)
+            if not naked_curves:
+                print("Skipped '{0}' - no boundary (naked) edges found.".format(label))
+                continue
+
+            search_length = brep1.GetBoundingBox(True).Diagonal.Length * 2.0
+            if search_length < tolerance:
+                search_length = 1.0
+
+            # Overshoot the slot's open end well past S1's actual boundary
+            # (scaled to the panel's own size, not a tiny multiple of
+            # tolerance) so the outline reliably clears the true edge even
+            # where it isn't perpendicular to the slot direction.
+            # Brep.Split() trims the outline to S1's real boundary anyway,
+            # so a generous overshoot here is free - it just guarantees no
+            # leftover sliver at the opening.
+            edge_overshoot = search_length
+
+            # (outline curve, plane it was built in, "slot"/"rathole")
+            # tuples, across every face of S1 and every S2 it intersects.
+            all_outlines = []
+
+            for obj_id2, (rh_obj2, brep2) in set2_breps.items():
+                success, curves, points = Intersection.BrepBrep(brep1, brep2, tolerance)
+                if not success or not curves:
+                    continue
+
+                for curve in curves:
+                    face_idx, plane = face_and_plane_for_curve(brep1, curve, tolerance, label)
+                    if plane is None:
+                        continue
+
+                    cutouts = outlines_for_intersection_curve(
+                        curve, naked_curves, snap_tol, edge_overshoot,
+                        plane.Normal, half_width, tolerance, search_length,
+                        tolerance, label, cap_pullback, rathole_radius)
+                    for outline, kind in cutouts:
+                        all_outlines.append((outline, plane, kind))
+
+            if not all_outlines:
+                continue
+
+            outline_curves = [item[0] for item in all_outlines]
+            # Brep.Split has both a Split(IEnumerable<Brep>, ...) and a
+            # Split(IEnumerable<Curve>, ...) overload - a plain Python list
+            # carries no static element type under PythonNet, so the two
+            # overloads are ambiguous unless the array is explicitly typed
+            # as Curve[] here.
+            curve_array = System.Array[rg.Curve](outline_curves)
+            pieces = brep1.Split(curve_array, tolerance)
+            if not pieces:
+                print("Skipped '{0}' - Split() failed to produce a result.".format(label))
+                continue
+
+            kept_pieces = []
+            for piece in pieces:
+                amp = rg.AreaMassProperties.Compute(piece)
+                if amp is None:
+                    kept_pieces.append(piece)
+                    continue
+                centroid = amp.Centroid
+
+                is_cutout_piece = False
+                for outline, plane, kind in all_outlines:
+                    if outline.Contains(centroid, plane, tolerance) == rg.PointContainment.Inside:
+                        is_cutout_piece = True
+                        break
+
+                if not is_cutout_piece:
+                    kept_pieces.append(piece)
+
+            if not kept_pieces:
+                print("Skipped replacing '{0}' - slot removal left no material.".format(label))
+                continue
+
+            if len(kept_pieces) == 1:
+                result_brep = kept_pieces[0]
+            else:
+                joined = rg.Brep.JoinBreps(kept_pieces, tolerance)
+                if not joined:
+                    print("Skipped replacing '{0}' - could not rejoin remaining material pieces.".format(label))
+                    continue
+                result_brep = joined[0]
+                if len(joined) > 1:
+                    print("  Warning: slots on '{0}' split it into {1} disconnected pieces; keeping only the first.".format(
+                        label, len(joined)))
+
+            if sc.doc.Objects.Replace(obj_id, result_brep):
+                surfaces_modified += 1
+                total_slots += sum(1 for _, _, kind in all_outlines if kind == "slot")
+                total_ratholes += sum(1 for _, _, kind in all_outlines if kind == "rathole")
+            else:
+                print("Failed to replace '{0}' in the document.".format(label))
+
+    except Exception as ex:
+        print("An error occurred during execution: {0}".format(str(ex)))
+
+    finally:
+        sc.doc.Objects.UnselectAll()
+        sc.doc.EndUndoRecord(undo_record)
+        rs.EnableRedraw(True)
+        sc.doc.Views.Redraw()
+
+    print("Cut {0} slot(s) and {1} rathole(s) across {2} surface(s).".format(
+        total_slots, total_ratholes, surfaces_modified))
+
+
+if __name__ == "__main__":
+    main()
