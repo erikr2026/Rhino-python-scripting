@@ -34,3 +34,59 @@ higher-versioned file; originals are untouched.
   pass. Left exactly as-is per the no-behavior-change rule for this pass,
   with an inline comment flagging it — **worth confirming with whoever
   runs this script whether the double invocation is intentional.**
+
+## New: JOINERY_INTERSECTION_SLOT_CUTTER.py (2026-08-06)
+
+New script, not a rewrite of an existing one. Cuts notch/dado intersection
+slots into a 1st set of zero-thickness surfaces, sized to receive a 2nd
+set of "cutting" surfaces that pass through them — the standard BRIX
+flat-panel notch joint. Workflow: select 1st-set surfaces, select 2nd-set
+(cutting) surfaces, enter 2nd-set material thickness. Slot width =
+thickness + 1/16" oversize, converted to the document's actual model unit
+system (not hardcoded assuming inches). The slot's open end is
+auto-detected against S1's nearest naked boundary edge — never
+user-picked. Handles three cases per S1/S2 intersection: (1) the common
+case, one end already on S1's boundary → open end there, semicircular cap
+at the far (interior) end where S2's own edge sits; (2) neither
+intersection-curve endpoint starts on a boundary → ray-casts a line from
+the interior end, extended past the nearer endpoint, to find where it
+actually crosses S1's boundary, then treats that as case (1); (3) both
+ends already on a boundary (S2 passes fully through S1) → straight
+full-width channel, no semicircle.
+
+**NOT TESTED AGAINST LIVE RHINO GEOMETRY.** No Rhino install is available
+in the authoring environment. Every RhinoCommon call was checked against a
+live pull of developer.rhino3d.com's RhinoCommon API JSON data source this
+session (method signatures, out/ref-parameter shapes, return types) — not
+against a running Rhino instance. Flagging the specific parts most likely
+to need real-world correction on first run:
+
+- **`BrepFace.Split(curves, tolerance)` + face-removal pass (algorithm
+  step 7).** Confirmed via live docs that `Split` returns a whole new
+  `Brep` (or `None` on failure) rather than modifying the face's parent
+  Brep in place — the script is written for that return-a-new-Brep
+  behavior, but the *practical* success rate of `Split` against
+  real-world outline curves it's never been fed before (near-boundary
+  curves that graze S1's edge, multiple overlapping slot outlines on one
+  panel, an outline curve whose extended segments land just outside S1's
+  original trim) is unverified. If `Split` returns `None` or an
+  unexpected face count on real geometry, that's the first thing to
+  debug.
+- **The ray-cast boundary-crossing search** (`find_boundary_crossing`,
+  used when neither end of an S1/S2 intersection curve starts near a
+  naked edge) picks the crossing point nearest the approximate near
+  endpoint out of all `Intersection.CurveCurve` hits against every naked
+  boundary curve. This is a reasonable heuristic for typical convex-ish
+  panel edges but hasn't been tested against a concave or multi-edge
+  panel boundary where the ray could cross more than one naked edge
+  before reaching the intended exit.
+- **`BOUNDARY_SNAP_MULTIPLE` (25x tolerance) and `EDGE_OVERSHOOT_MULTIPLE`
+  (10x tolerance)** module constants are development placeholders, not
+  tuned against real fabrication tolerances — same caveat pattern as the
+  side-extension/offset placeholders already flagged in this repo's
+  `shell-bisector-t-surface` project.
+- The semicircular-cap construction (`Arc(pointA, tangentA, pointB)` with
+  the chord perpendicular to the tangent) is standard, low-risk geometry,
+  but the very first real run should visually confirm the cap actually
+  lands centered on S2's edge and bulges the correct direction (away from
+  the open end, into the panel) before trusting it on production parts.
