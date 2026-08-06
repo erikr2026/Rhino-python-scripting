@@ -58,14 +58,15 @@ was checked against a live pull of developer.rhino3d.com's RhinoCommon
 API JSON data source this session - not against a running Rhino instance,
 since no Rhino install is available in this authoring environment.
 
-*** NOT TESTED AGAINST LIVE RHINO GEOMETRY. ***
-This script has only been checked for Python syntax validity and API
-signatures against live docs - it has never been run inside Rhino. See
-this project's CHANGELOG.md for the specific parts most likely to need
-real-world correction: the Brep.Split() / piece-removal pass (step 7 of
-the algorithm), the Brep.ClosestPoint face-matching for multi-face
-polysurfaces, and the ray-cast boundary-crossing search used when neither
-end of an intersection curve starts near a naked edge.
+Confirmed working against real Rhino geometry (owner-run, 2026-08-06):
+core slot cutting (both capped and full-through cases), polysurface
+support on both sets, the opening-sliver and cap-pullback fixes, and the
+rathole cutout feature all produced correct results in real runs. See
+this project's CHANGELOG.md for the specific fixes each real run
+surfaced along the way. Not exhaustively tested - e.g. the ray-cast
+boundary-crossing path (used when neither intersection-curve endpoint
+starts near a naked edge) hasn't specifically been exercised yet, since
+the owner's runs so far always had at least one endpoint on the boundary.
 """
 
 import System
