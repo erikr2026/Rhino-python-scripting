@@ -209,3 +209,57 @@ Still **NOT TESTED AGAINST LIVE RHINO GEOMETRY beyond this one owner
 screenshot** — the sliver fix in particular (generous overshoot relying
 on `Brep.Split()`'s own trimming) should be re-checked on the next real
 run to confirm no new artifacts appear at the opening.
+
+## New feature: rathole cutouts at slot openings (2026-08-06, same day)
+
+Owner add-on request after confirming the two fixes above worked: a 1"
+radius (owner's own correction from an initial "2"R" ask) circular
+cutout — a "rathole" in fabrication terms, stress/access relief for the
+sharp interior corner a plain slot opening otherwise leaves — at every
+point where a slot meets S1's naked boundary edge, styled the same way as
+the existing slot cutting (illustrated by the owner with a screenshot
+showing the desired shape next to the already-working slot).
+
+Implementation:
+- New `build_rathole_circle(center_pt, plane_normal, radius, tolerance)`:
+  a full circle (`Rhino.Geometry.Circle(Plane, radius).ToNurbsCurve()`,
+  confirmed via live docs) centered exactly on the boundary point,
+  oriented in S1's own face plane. Confirmed via live docs:
+  `Plane(Point3d origin, Vector3d normal)` constructor exists, so no
+  arbitrary-axis plane construction is needed — just origin + normal.
+  The circle is centered ON the boundary (not pulled inboard) by design:
+  the outward half falls outside S1's actual material and is simply
+  ignored by `Brep.Split()`'s own trimming, the same reasoning already
+  used for the slot's edge overshoot fix above — no need to precompute
+  exactly how much of the circle is "real."
+- `outlines_for_intersection_curve()` now returns a **list** of
+  `(Curve, kind)` pairs (`kind` is `"slot"` or `"rathole"`) instead of a
+  single curve — a full-through channel gets a rathole at each of its two
+  open ends, a capped slot gets one at its single open end. A small
+  `finish()` closure factors out the "build the rathole(s) for this
+  outline's open point(s)" step so it isn't duplicated across the
+  function's four branches (near/near, near/far, far/near, ray-cast).
+- Rathole circles are added into the *same* `all_outlines` list already
+  used for the slot geometry — no separate split pass or curve-boolean-
+  union call needed. Since `Brep.Split()` already takes every cutting
+  curve in one call and the piece-classification step already tests each
+  resulting piece's centroid against *every* registered outline, adding
+  the circle as one more entry in that same list is sufficient: any
+  split-off sliver between the circle and the slot rectangle will still
+  test `Inside` for at least one of the two overlapping outlines and get
+  removed, so the two shapes read as one continuous cutout without an
+  explicit union operation.
+- New prompt: "Rathole radius at slot openings (0 = none)", defaulting to
+  1" (`DEFAULT_RATHOLE_RADIUS_INCHES = 1.0`, unit-converted like the
+  oversize/thickness defaults) — entering 0 skips rathole generation
+  entirely, so the feature doesn't force itself on every run.
+- Final summary line now reports slots and ratholes separately: "Cut N
+  slot(s) and M rathole(s) across K surface(s)."
+
+**NOT TESTED AGAINST LIVE RHINO GEOMETRY** — this is new code added on
+top of the confirmed-working slot-cutting geometry, not itself run yet.
+The riskiest part is the "let Split() sort it out" assumption for merging
+overlapping circle/rectangle outlines into a single continuous void —
+should be checked visually on first run to confirm the rathole actually
+reads as one blended opening rather than a separate disjoint hole right
+next to the slot.
