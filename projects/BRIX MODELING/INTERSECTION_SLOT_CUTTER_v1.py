@@ -2,7 +2,7 @@
 
 """
 Rhino Python Script (Rhino 8 & 9)
-BRIX JOINERY - Intersection Slot Cutter.
+Intersection Slot Cutter - v1.
 
 Cuts notch/dado slots into a first set of zero-thickness surfaces ("1st
 set"), sized to receive a second set of zero-thickness "cutting" surfaces

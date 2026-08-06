@@ -281,3 +281,13 @@ overlapping circle/rectangle outlines into a single continuous void —
 should be checked visually on first run to confirm the rathole actually
 reads as one blended opening rather than a separate disjoint hole right
 next to the slot.
+
+## Renamed: JOINERY_INTERSECTION_SLOT_CUTTER.py -> INTERSECTION_SLOT_CUTTER_v1.py (2026-08-06, same day)
+
+Owner-requested rename after confirming the script works: dropped the
+`JOINERY_` prefix (script no longer lives in `BRIX JOINERY/`, so the
+prefix was stale) and added a `_v1` suffix, matching this folder's
+existing version-numbered naming (`Offset_Srf_with_Name_v3.py`, etc.).
+Updated the module docstring's title line to match ("Intersection Slot
+Cutter - v1"). No behavior changes - filename and one docstring line
+only.
