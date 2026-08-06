@@ -170,3 +170,42 @@ Still **NOT TESTED AGAINST LIVE RHINO GEOMETRY** beyond confirming this
 specific error no longer reproduces on paper (no Rhino available in the
 authoring environment) — needs a real re-run to confirm the fix actually
 clears the error and the resulting cut geometry is correct.
+
+## Fix: leftover sliver at the opening + slot length pullback
+(2026-08-06, same day, first successful real-Rhino run + owner feedback)
+
+Third real run actually produced correct-looking geometry, with two real
+issues the owner caught by eye on the result:
+
+1. **Leftover material sliver right at the slot's opening.** The open
+   end's closing segment was built at a fixed, tiny overshoot
+   (`EDGE_OVERSHOOT_MULTIPLE = 10x` the document's absolute tolerance —
+   typically a few thousandths of a unit). Wherever S1's actual boundary
+   edge isn't exactly perpendicular to the slot's own direction (the
+   normal case — panel edges are rarely square to every slot crossing
+   them), that tiny fixed-distance overshoot doesn't reliably clear the
+   true edge on both corners of the outline, leaving a small triangular
+   sliver of material behind. Fixed by removing the tolerance-based
+   overshoot entirely and reusing the panel-scaled `search_length` value
+   (2x the S1 bounding-box diagonal, already computed per-S1 for the
+   ray-cast search) as the overshoot distance instead. This is safe and
+   free: `Brep.Split()` already trims the cutting curve to S1's actual
+   surface domain, so overshooting generously past the true edge changes
+   nothing about where the final cut lands — it just guarantees the
+   outline always fully clears the boundary regardless of its local
+   angle. `EDGE_OVERSHOOT_MULTIPLE` constant removed.
+2. **Slot ran too far in — the round cap should stop short of the actual
+   S2 intersection by half the 2nd-set thickness**, not sit exactly at
+   it. Added a new `cap_pullback` parameter, threaded through
+   `outlines_for_intersection_curve()` into `build_capped_outline()`
+   only (a full-through channel has no cap, so it's unaffected). In
+   `main()`, `cap_pullback = thickness / 2.0` is computed from the
+   owner-entered 2nd-set thickness and passed down. `build_capped_outline`
+   clamps the pullback so it can never invert the slot (always keeps at
+   least `join_tolerance` of length even if `cap_pullback` exceeds the
+   curve's natural length).
+
+Still **NOT TESTED AGAINST LIVE RHINO GEOMETRY beyond this one owner
+screenshot** — the sliver fix in particular (generous overshoot relying
+on `Brep.Split()`'s own trimming) should be re-checked on the next real
+run to confirm no new artifacts appear at the opening.

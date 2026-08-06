@@ -8,10 +8,19 @@ Cuts notch/dado slots into a first set of zero-thickness surfaces ("1st
 set"), sized to receive a second set of zero-thickness "cutting" surfaces
 ("2nd set") that pass through them. Standard BRIX flat-panel joinery: each
 1st-set panel gets a slot that opens at its nearest boundary edge and
-terminates inside the panel with a semicircular rounded end at the point
-where the 2nd-set panel actually crosses it. If a 2nd-set panel passes
-fully through a 1st-set panel (enters and exits through two boundary
-edges), a straight full-width channel is cut instead - no semicircle.
+terminates inside the panel with a semicircular rounded end, pulled back
+from where the 2nd-set panel actually crosses it by half the 2nd-set
+material thickness. If a 2nd-set panel passes fully through a 1st-set
+panel (enters and exits through two boundary edges), a straight
+full-width channel is cut instead - no semicircle, no pullback.
+
+The slot's open end is overshot well past S1's actual boundary edge
+(scaled to the panel's own size, not a tiny fixed tolerance) before the
+final Brep.Split() call, since Split() trims the outline back to S1's
+true boundary anyway - a small fixed overshoot left a leftover sliver of
+material at the opening whenever the boundary edge wasn't exactly
+perpendicular to the slot direction (confirmed on the first real-Rhino
+run of the polysurface-support fix).
 
 Both sets may be single surfaces OR polysurfaces (multi-face Breps) - each
 S1/S2 pair is intersected as whole Breps (Intersection.BrepBrep), and each
@@ -75,11 +84,6 @@ DEFAULT_THICKNESS_INCHES = 0.25
 # fabrication geometry - a development placeholder like the ones flagged
 # in this repo's other BRIX scripts.
 BOUNDARY_SNAP_MULTIPLE = 25.0
-
-# How many multiples of tolerance to overshoot the true boundary point by,
-# so the closed slot outline reliably removes material all the way to the
-# panel edge despite floating-point mismatch at the boundary.
-EDGE_OVERSHOOT_MULTIPLE = 10.0
 
 
 def prompt_for_surfaces(prompt_text, exclude_ids=None):
@@ -194,15 +198,27 @@ def find_boundary_crossing(near_point, far_point, naked_curves, search_length, t
     return best_pt
 
 
-def build_capped_outline(open_pt, interior_pt, plane_normal, half_width, edge_overshoot, join_tolerance):
+def build_capped_outline(open_pt, interior_pt, plane_normal, half_width, edge_overshoot,
+                          join_tolerance, cap_pullback=0.0):
     """Build the closed slot outline for a slot that opens at `open_pt` on
     the boundary and terminates inside the panel at `interior_pt` with a
-    semicircular cap. Returns a closed Curve, or None on failure."""
+    semicircular cap. Returns a closed Curve, or None on failure.
 
-    forward = interior_pt - open_pt
-    if forward.Length < join_tolerance:
+    `cap_pullback`, if given, shortens the slot by pulling the capped end
+    back toward `open_pt` by that distance (e.g. half the 2nd-set material
+    thickness) - clamped so the slot never inverts (always keeps at least
+    `join_tolerance` of length)."""
+
+    raw_forward = interior_pt - open_pt
+    raw_length = raw_forward.Length
+    if raw_length < join_tolerance:
         return None
+    forward = rg.Vector3d(raw_forward)
     forward.Unitize()
+
+    if cap_pullback > 0.0:
+        effective_pullback = min(cap_pullback, max(raw_length - join_tolerance, 0.0))
+        interior_pt = interior_pt - forward * effective_pullback
 
     perp = rg.Vector3d.CrossProduct(plane_normal, forward)
     if perp.Length < 1e-9:
@@ -296,10 +312,13 @@ def face_and_plane_for_curve(brep, curve, tolerance, label):
 
 def outlines_for_intersection_curve(curve, naked_curves, snap_tol, edge_overshoot,
                                      plane_normal, half_width, join_tolerance,
-                                     search_length, tolerance, label):
+                                     search_length, tolerance, label, cap_pullback=0.0):
     """Classify one S1/S2 intersection curve's endpoints against S1's
     boundary and build the resulting slot outline. Returns a Curve, or
-    None with a printed warning if it couldn't be built."""
+    None with a printed warning if it couldn't be built.
+
+    `cap_pullback` only affects capped (semicircular-end) outlines - a
+    full-through channel has no cap to pull back, so it's ignored there."""
 
     if curve.GetLength() < tolerance:
         print("  Skipped a degenerate (near-zero-length) intersection on {0}.".format(label))
@@ -315,17 +334,18 @@ def outlines_for_intersection_curve(curve, naked_curves, snap_tol, edge_overshoo
     end_near = dist_end is not None and dist_end <= snap_tol
 
     if start_near and end_near:
-        # 2nd-set surface passes fully through S1 - full-width channel.
+        # 2nd-set surface passes fully through S1 - full-width channel, no
+        # cap, so cap_pullback doesn't apply here.
         return build_full_channel_outline(proj_start, proj_end, plane_normal,
                                            half_width, edge_overshoot, join_tolerance)
 
     if start_near and not end_near:
         return build_capped_outline(proj_start, p_end, plane_normal,
-                                     half_width, edge_overshoot, join_tolerance)
+                                     half_width, edge_overshoot, join_tolerance, cap_pullback)
 
     if end_near and not start_near:
         return build_capped_outline(proj_end, p_start, plane_normal,
-                                     half_width, edge_overshoot, join_tolerance)
+                                     half_width, edge_overshoot, join_tolerance, cap_pullback)
 
     # Neither endpoint is near a boundary - extend from whichever end is
     # closer to one, ray-casting out to find the true boundary crossing.
@@ -347,7 +367,8 @@ def outlines_for_intersection_curve(curve, naked_curves, snap_tol, edge_overshoo
         print("  Skipped an intersection on {0} - could not ray-cast to a boundary edge.".format(label))
         return None
 
-    return build_capped_outline(open_pt, far_pt, plane_normal, half_width, edge_overshoot, join_tolerance)
+    return build_capped_outline(open_pt, far_pt, plane_normal, half_width, edge_overshoot,
+                                 join_tolerance, cap_pullback)
 
 
 def main():
@@ -361,7 +382,6 @@ def main():
         return
 
     snap_tol = tolerance * BOUNDARY_SNAP_MULTIPLE
-    edge_overshoot = tolerance * EDGE_OVERSHOOT_MULTIPLE
 
     set1_picked = prompt_for_surfaces("Select 1st-set surfaces (get cutouts)")
     if not set1_picked:
@@ -389,6 +409,10 @@ def main():
     oversize = OVERSIZE_INCHES * unit_scale
     slot_width = thickness + oversize
     half_width = slot_width / 2.0
+
+    # Pull the capped (interior) end of every slot back toward the open
+    # edge by half the 2nd-set material thickness.
+    cap_pullback = thickness / 2.0
 
     # Build Brep working copies up front, keyed by object id. Either
     # single-face or polysurface Breps are accepted for both sets.
@@ -434,6 +458,15 @@ def main():
             if search_length < tolerance:
                 search_length = 1.0
 
+            # Overshoot the slot's open end well past S1's actual boundary
+            # (scaled to the panel's own size, not a tiny multiple of
+            # tolerance) so the outline reliably clears the true edge even
+            # where it isn't perpendicular to the slot direction.
+            # Brep.Split() trims the outline to S1's real boundary anyway,
+            # so a generous overshoot here is free - it just guarantees no
+            # leftover sliver at the opening.
+            edge_overshoot = search_length
+
             # (outline curve, plane it was built in) pairs, across every
             # face of S1 and every S2 it intersects.
             all_outlines = []
@@ -451,7 +484,7 @@ def main():
                     outline = outlines_for_intersection_curve(
                         curve, naked_curves, snap_tol, edge_overshoot,
                         plane.Normal, half_width, tolerance, search_length,
-                        tolerance, label)
+                        tolerance, label, cap_pullback)
                     if outline is not None:
                         all_outlines.append((outline, plane))
 
