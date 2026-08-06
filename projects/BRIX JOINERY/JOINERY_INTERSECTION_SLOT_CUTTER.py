@@ -49,6 +49,7 @@ polysurfaces, and the ray-cast boundary-crossing search used when neither
 end of an intersection curve starts near a naked edge.
 """
 
+import System
 import Rhino
 import Rhino.Geometry as rg
 from Rhino.Geometry.Intersect import Intersection
@@ -458,7 +459,13 @@ def main():
                 continue
 
             outline_curves = [pair[0] for pair in all_outlines]
-            pieces = brep1.Split(outline_curves, tolerance)
+            # Brep.Split has both a Split(IEnumerable<Brep>, ...) and a
+            # Split(IEnumerable<Curve>, ...) overload - a plain Python list
+            # carries no static element type under PythonNet, so the two
+            # overloads are ambiguous unless the array is explicitly typed
+            # as Curve[] here.
+            curve_array = System.Array[rg.Curve](outline_curves)
+            pieces = brep1.Split(curve_array, tolerance)
             if not pieces:
                 print("Skipped '{0}' - Split() failed to produce a result.".format(label))
                 continue

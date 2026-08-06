@@ -138,3 +138,35 @@ now also covering the new `Brep.ClosestPoint`/whole-Brep-`Split`/
 (`face_and_plane_for_curve`) is the newest, least-exercised part of the
 algorithm and the first thing to check if a polysurface run behaves
 unexpectedly.
+
+## Fix: PythonNet overload ambiguity on Brep.Split (2026-08-06, same day)
+
+Second real-Rhino run, immediately after the polysurface fix above, hit:
+`Multiple targets could match: Split(IEnumerable[Brep], float),
+Split(IEnumerable[Curve], float)`. `Brep` has both a
+`Split(IEnumerable<Brep>, tolerance)` overload (splitting with cutter
+Breps) and a `Split(IEnumerable<Curve>, tolerance)` overload (splitting
+with curves, the one this script actually wants) at the identical 2-arg
+arity — PythonNet can resolve overloads by argument *type*, but a plain
+Python `list` carries no static CLR element type, so it can't tell which
+overload a bare `[curve1, curve2, ...]` list is meant to satisfy.
+
+Fixed by explicitly typing the argument as a real `Curve[]` before the
+call: `curve_array = System.Array[rg.Curve](outline_curves)` (new `import
+System` added), then `brep1.Split(curve_array, tolerance)`. Checked the
+rest of the script for the same failure mode: `Curve.JoinCurves` and
+`Brep.JoinBreps` calls are safe as-is, since neither has a same-arity
+overload set spanning two different element types the way `Brep.Split`
+does — only `Brep.Split` needed the explicit array typing.
+
+**General lesson for this whole class of RhinoCommon method (any method
+overloaded across different collection *element* types at the same
+argument count):** a plain Python list is not enough under PythonNet:
+wrap it as `System.Array[ElementType](python_list)` before the call. Adding
+this as a standing rule to `keel.md` / this project's coding-conventions
+section, since it's a real, hit-on-first-run bug class, not a one-off.
+
+Still **NOT TESTED AGAINST LIVE RHINO GEOMETRY** beyond confirming this
+specific error no longer reproduces on paper (no Rhino available in the
+authoring environment) — needs a real re-run to confirm the fix actually
+clears the error and the resulting cut geometry is correct.
