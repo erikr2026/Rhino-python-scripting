@@ -1,6 +1,6 @@
 # aluminum-calculator
 
-**Status: WIP** — untested inside Rhino. Owner reviewed the source for bugs before running it; not yet verified live.
+**Status: WIP, paused** — runs in Rhino now (bugs #6-#9 fixed, form opens and stays on top), but owner reports it "worked mostly, needs work" — not yet pinned down which parts. Picking back up later; see bottom of journal 2026-08-07 for the fix history so far.
 
 Eto.Forms UI for estimating aluminum sheet/plate weight from marine/structural alloy data (5086, 5083, 5052, 3003, 6061), by thickness x width x length, linear length, surface area, or volume. Can also pick Rhino curves/surfaces/solids directly to auto-fill a mode, and push a calculation's results back onto selected objects as user text.
 
