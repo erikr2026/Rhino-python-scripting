@@ -207,39 +207,44 @@ class AluminumWeightCalculatorForm(forms.Form):
         self.OnMaterialChanged(None, None)
 
     def _init_layout(self):
+        # NOTE: Eto's StackLayoutItem has an implicit C# conversion from
+        # Control, but PythonNet (Rhino's CPython bridge) does not apply
+        # implicit conversion operators at call sites - Items.Add(a_control)
+        # raises TypeError here even though it compiles fine in C#. Every
+        # control must be wrapped explicitly in forms.StackLayoutItem(...).
         col_material = forms.StackLayout()
         col_material.Orientation = forms.Orientation.Vertical
         col_material.Spacing = 8
         col_material.Width = 150
-        col_material.Items.Add(self.lbl_material)
-        col_material.Items.Add(self.dd_material)
+        col_material.Items.Add(forms.StackLayoutItem(self.lbl_material))
+        col_material.Items.Add(forms.StackLayoutItem(self.dd_material))
 
         col_alloy = forms.StackLayout()
         col_alloy.Orientation = forms.Orientation.Vertical
         col_alloy.Spacing = 8
         col_alloy.Width = 200
-        col_alloy.Items.Add(self.lbl_alloy)
-        col_alloy.Items.Add(self.dd_alloy)
-        col_alloy.Items.Add(self.lbl_alloy_desc)
+        col_alloy.Items.Add(forms.StackLayoutItem(self.lbl_alloy))
+        col_alloy.Items.Add(forms.StackLayoutItem(self.dd_alloy))
+        col_alloy.Items.Add(forms.StackLayoutItem(self.lbl_alloy_desc))
 
         col_dims = forms.StackLayout()
         col_dims.Orientation = forms.Orientation.Vertical
         col_dims.Spacing = 8
         col_dims.Width = 200
-        col_dims.Items.Add(self.lbl_mode)
-        col_dims.Items.Add(self.dd_mode)
-        col_dims.Items.Add(self.lbl_thickness)
-        col_dims.Items.Add(self.dd_thickness)
-        col_dims.Items.Add(self.txt_thickness)
-        col_dims.Items.Add(self.lbl_width)
-        col_dims.Items.Add(self.txt_width)
-        col_dims.Items.Add(self.lbl_length)
-        col_dims.Items.Add(self.txt_length)
-        col_dims.Items.Add(self.lbl_alt_val)
-        col_dims.Items.Add(self.txt_alt_val)
-        col_dims.Items.Add(self.dd_alt_unit)
-        col_dims.Items.Add(self.lbl_qty)
-        col_dims.Items.Add(self.txt_qty)
+        col_dims.Items.Add(forms.StackLayoutItem(self.lbl_mode))
+        col_dims.Items.Add(forms.StackLayoutItem(self.dd_mode))
+        col_dims.Items.Add(forms.StackLayoutItem(self.lbl_thickness))
+        col_dims.Items.Add(forms.StackLayoutItem(self.dd_thickness))
+        col_dims.Items.Add(forms.StackLayoutItem(self.txt_thickness))
+        col_dims.Items.Add(forms.StackLayoutItem(self.lbl_width))
+        col_dims.Items.Add(forms.StackLayoutItem(self.txt_width))
+        col_dims.Items.Add(forms.StackLayoutItem(self.lbl_length))
+        col_dims.Items.Add(forms.StackLayoutItem(self.txt_length))
+        col_dims.Items.Add(forms.StackLayoutItem(self.lbl_alt_val))
+        col_dims.Items.Add(forms.StackLayoutItem(self.txt_alt_val))
+        col_dims.Items.Add(forms.StackLayoutItem(self.dd_alt_unit))
+        col_dims.Items.Add(forms.StackLayoutItem(self.lbl_qty))
+        col_dims.Items.Add(forms.StackLayoutItem(self.txt_qty))
 
         col_output = forms.StackLayout()
         col_output.Orientation = forms.Orientation.Vertical
@@ -248,18 +253,18 @@ class AluminumWeightCalculatorForm(forms.Form):
         lbl_res = forms.Label()
         lbl_res.Text = "Calculation Summary:"
 
-        col_output.Items.Add(self.btn_pick)
-        col_output.Items.Add(lbl_res)
+        col_output.Items.Add(forms.StackLayoutItem(self.btn_pick))
+        col_output.Items.Add(forms.StackLayoutItem(lbl_res))
         col_output.Items.Add(forms.StackLayoutItem(self.txt_output, True))
-        col_output.Items.Add(self.btn_apply)
-        col_output.Items.Add(self.btn_copy)
+        col_output.Items.Add(forms.StackLayoutItem(self.btn_apply))
+        col_output.Items.Add(forms.StackLayoutItem(self.btn_copy))
 
         main_layout = forms.StackLayout()
         main_layout.Orientation = forms.Orientation.Horizontal
         main_layout.Spacing = 20
-        main_layout.Items.Add(col_material)
-        main_layout.Items.Add(col_alloy)
-        main_layout.Items.Add(col_dims)
+        main_layout.Items.Add(forms.StackLayoutItem(col_material))
+        main_layout.Items.Add(forms.StackLayoutItem(col_alloy))
+        main_layout.Items.Add(forms.StackLayoutItem(col_dims))
         main_layout.Items.Add(forms.StackLayoutItem(col_output, True))
 
         self.Content = main_layout
