@@ -2,11 +2,15 @@
 
 **Status: WIP** — untested inside Rhino. Owner reviewed the source for bugs before running it; not yet verified live.
 
-Eto.Forms UI for estimating aluminum sheet/plate weight from marine/structural alloy data (5086, 5083, 5052, 5383, 6061), by thickness x width x length, linear length, surface area, or volume. Can also pick Rhino curves/surfaces/solids directly to auto-fill a mode.
+Eto.Forms UI for estimating aluminum sheet/plate weight from marine/structural alloy data (5086, 5083, 5052, 3003, 6061), by thickness x width x length, linear length, surface area, or volume. Can also pick Rhino curves/surfaces/solids directly to auto-fill a mode, and push a calculation's results back onto selected objects as user text.
 
 ## How to run
 
 Paste `Aluminum_Weight_Calculator.py` into Rhino's `RunPythonScript` command, or load it via the ScriptEditor and run.
+
+## Data-accuracy caveat
+
+The alloy table (`ALUMINUM_DATA` / `MATERIALS` at the top of the script) was intended to be sourced from alaskancopper.com's Aluminum Sheet & Plate page, but that domain is blocked by the Claude Code environment's outbound network policy (403 on both the page and their catalog PDF) — it could **not** be live-verified against the actual site. Values are standard published alloy densities/specs, not a confirmed distributor's current stock list. Cross-check against alaskancopper.com (or another stock distributor) before relying on this for real quoting.
 
 ## Fix history
 
@@ -16,3 +20,24 @@ Initial version (owner-supplied) had five bugs found in review, all fixed in the
 3. Mixed picks (e.g. a solid + a curve together) silently dropped everything but the highest-priority category with no warning — now prints a command-line note when more than one category is found.
 4. `OnCopyClipboard` had a stray `rs.StatusBarDistance(0.0)` call unrelated to copying to clipboard — removed.
 5. Open `Extrusion` geometry was passed straight to `AreaMassProperties.Compute` instead of being converted to `Brep` first (inconsistent with how solid Extrusions were already handled) — now converts consistently before any mass-properties call.
+
+## 2026-08-07 update: 3-column relayout, Apply-to-Selected, alloy swap
+
+**Relayout.** The form is now four regions left to right, strictly Material → Alloy/Type → Dimensions → Output:
+- **Material** column: dropdown, currently just "Aluminum". Data is now nested `MATERIALS = {"Aluminum": {"Sheet & Plate": ALUMINUM_DATA}}` so a future session can add Copper/Brass/Steel or other product forms (e.g. Aluminum Extrusion) without touching the UI code. Changing Material repopulates the Alloy/Type dropdown via a generic handler (`get_material_alloys()`), not one hardcoded to Aluminum.
+- **Alloy/Type** column: the alloy dropdown + spec/description label, filtered by the selected Material.
+- **Dimensions** column: calculation-mode selector (T×W×L / Linear / Area / Volume) merged with the thickness/width/length/alt-value/unit/quantity fields that used to be split across two columns.
+- **Output** column: unchanged in spirit — Pick Rhino Geometry button, results TextArea, new Apply to Selected Objects button, Copy to Clipboard button.
+
+Verified the per-mode unit dropdowns were (and still are) wired correctly: Linear offers Feet/Inches, Surface Area offers Sq. Feet/Sq. Inches, Volume offers Cubic Inches/Cubic Feet — all populated in `OnModeChanged` and consumed correctly in `Calculate()`.
+
+**New: Apply to Selected Objects.** Reverse direction of Pick Rhino Geometry — instead of reading geometry into the calculator, it writes the *current calculation's* output onto whatever objects are selected in the document, as RhinoCommon object user text (`rs.SetUserText`). Prompts for selection the same way `OnPickGeometry` does (hides the form, `rs.GetObjects(..., preselect=True)`, shows it again). For each selected object it writes:
+- `"Material"` — e.g. `"Aluminum"`
+- `"Alloy"` — e.g. `"5086-H116"`
+- `"Spec"` — the alloy's spec string
+- `"Weight (lbs)"` — the **per-piece** weight (not the quantity-multiplied total, since it's written once per individual object), formatted `"{0:.2f}"`
+- `"Thickness (in)"` — written for T×W×L, Linear, and Surface Area modes (all three use thickness in the underlying math), formatted `"{0:.3f}"`; **omitted** for Volume mode, which never touches thickness
+
+Writes are wrapped in a single undo record (`doc.BeginUndoRecord` / `doc.EndUndoRecord`) per this repo's convention. Guards the case where there's no valid current calculation (e.g. bad alloy selection) the same way `Calculate()` does. On completion it both writes a one-line count to the Rhino command line (`Rhino.RhinoApp.WriteLine`) and appends a confirmation line below the existing calculation summary in the output TextArea (doesn't overwrite it).
+
+**Alloy swap.** Dropped `5383-H116` (a European alloy designation, unlikely to be part of a standard US stock distributor's sheet/plate lineup, and unverifiable against alaskancopper.com per the caveat above). Added `3003-H14` in its place: spec `ASTM B209`, density `0.0980`, general-purpose non-marine sheet with excellent formability and lower strength than the 5000-series. The other four alloys (5086-H116, 5083-H116, 5052-H32, 6061-T6) are unchanged.

@@ -8,6 +8,19 @@ import scriptcontext as sc
 import Eto.Forms as forms
 import Eto.Drawing as drawing
 
+# --- DATA-ACCURACY CAVEAT (2026-08-07) ---------------------------------
+# This alloy list was intended to be sourced from alaskancopper.com's
+# Aluminum Sheet & Plate page, but that domain is blocked by this Claude
+# Code environment's outbound network policy (403 on both the page and
+# their catalog PDF) and could NOT be live-verified. Densities/specs below
+# are standard published values for well-established alloys, but the
+# owner should cross-check this table against alaskancopper.com (or
+# another stock distributor) directly before relying on it for real
+# quoting. The 5383-H116 entry was dropped (European alloy designation,
+# unlikely to be part of a standard US distributor's stock lineup and
+# unverifiable here) and replaced with 3003-H14.
+# -------------------------------------------------------------------------
+
 # Standard densities and specs for common aluminum sheet and plate alloys
 ALUMINUM_DATA = {
     "5086-H116": {
@@ -25,10 +38,10 @@ ALUMINUM_DATA = {
         "spec": "ASTM B 209",
         "desc": "General marine & industrial sheet. Good formability."
     },
-    "5383-H116": {
-        "density": 0.0960,
-        "spec": "DNV / ABS Marine Grade",
-        "desc": "15 percent higher yield strength than 5083. High-speed craft."
+    "3003-H14": {
+        "density": 0.0980,
+        "spec": "ASTM B209",
+        "desc": "General-purpose non-marine sheet. Excellent formability, lower strength than 5000-series."
     },
     "6061-T6": {
         "density": 0.0980,
@@ -36,6 +49,31 @@ ALUMINUM_DATA = {
         "desc": "Structural heat-treated plate/sheet. Good machinability."
     }
 }
+
+# Nested by Material -> Product Form -> Alloy, so a future session can add
+# other materials (Copper, Brass, Steel) or other product forms under an
+# existing material without restructuring the UI code. Today there is only
+# one material ("Aluminum") and one product form ("Sheet & Plate"), so this
+# nesting is a no-op wrapper around ALUMINUM_DATA.
+MATERIALS = {
+    "Aluminum": {
+        "Sheet & Plate": ALUMINUM_DATA
+    }
+}
+
+def get_material_alloys(material_key):
+    """
+    Flatten all product-form alloy dicts under a given material into one
+    dict for the Alloy/Type dropdown. Today every material has exactly one
+    product form, so this is a no-op merge, but it keeps the lookup generic
+    for when a second product form (e.g. Aluminum Extrusion, Aluminum Bar)
+    gets added under the same material without needing new UI code.
+    """
+    product_forms = MATERIALS.get(material_key, {})
+    alloys = {}
+    for form_alloys in product_forms.values():
+        alloys.update(form_alloys)
+    return alloys
 
 def parse_fabrication_input(input_str):
     if not input_str:
@@ -61,7 +99,7 @@ class AluminumWeightCalculatorForm(forms.Form):
     def __init__(self):
         super().__init__()
         self.Title = "Aluminum Sheet & Plate Weight Estimator"
-        self.ClientSize = drawing.Size(750, 450)
+        self.ClientSize = drawing.Size(950, 480)
         self.Resizable = True
         self.Padding = drawing.Padding(12)
 
@@ -70,19 +108,28 @@ class AluminumWeightCalculatorForm(forms.Form):
         self.OnModeChanged(None, None)
 
     def _init_controls(self):
+        # --- Material column ---
+        self.lbl_material = forms.Label()
+        self.lbl_material.Text = "Material:"
+
+        self.dd_material = forms.DropDown()
+        for material in MATERIALS.keys():
+            self.dd_material.Items.Add(str(material))
+        self.dd_material.SelectedIndex = 0
+        self.dd_material.SelectedIndexChanged += self.OnMaterialChanged
+
+        # --- Alloy/Type column ---
         self.lbl_alloy = forms.Label()
         self.lbl_alloy.Text = "Alloy / Temper:"
 
         self.dd_alloy = forms.DropDown()
-        for alloy in ALUMINUM_DATA.keys():
-            self.dd_alloy.Items.Add(str(alloy))
-        self.dd_alloy.SelectedIndex = 0
         self.dd_alloy.SelectedIndexChanged += self.OnAlloyChanged
 
         self.lbl_alloy_desc = forms.Label()
         self.lbl_alloy_desc.TextColor = drawing.Colors.Gray
         self.lbl_alloy_desc.Wrap = forms.WrapMode.Word
 
+        # --- Dimensions column ---
         self.lbl_mode = forms.Label()
         self.lbl_mode.Text = "Calculation Mode:"
 
@@ -138,6 +185,7 @@ class AluminumWeightCalculatorForm(forms.Form):
         self.dd_alt_unit = forms.DropDown()
         self.dd_alt_unit.SelectedIndexChanged += self.OnInputChanged
 
+        # --- Output / results column ---
         self.btn_pick = forms.Button()
         self.btn_pick.Text = "Pick Rhino Geometry"
         self.btn_pick.Click += self.OnPickGeometry
@@ -146,66 +194,92 @@ class AluminumWeightCalculatorForm(forms.Form):
         self.txt_output.ReadOnly = True
         self.txt_output.Height = 280
 
+        self.btn_apply = forms.Button()
+        self.btn_apply.Text = "Apply to Selected Objects"
+        self.btn_apply.Click += self.OnApplyToSelected
+
         self.btn_copy = forms.Button()
         self.btn_copy.Text = "Copy to Clipboard"
         self.btn_copy.Click += self.OnCopyClipboard
 
-        self.OnAlloyChanged(None, None)
+        self.current_result = None
+
+        self.OnMaterialChanged(None, None)
 
     def _init_layout(self):
-        col1 = forms.StackLayout()
-        col1.Orientation = forms.Orientation.Vertical
-        col1.Spacing = 8
-        col1.Width = 200
-        col1.Items.Add(self.lbl_alloy)
-        col1.Items.Add(self.dd_alloy)
-        col1.Items.Add(self.lbl_alloy_desc)
-        col1.Items.Add(forms.Label())
-        col1.Items.Add(self.lbl_mode)
-        col1.Items.Add(self.dd_mode)
+        col_material = forms.StackLayout()
+        col_material.Orientation = forms.Orientation.Vertical
+        col_material.Spacing = 8
+        col_material.Width = 150
+        col_material.Items.Add(self.lbl_material)
+        col_material.Items.Add(self.dd_material)
 
-        col2 = forms.StackLayout()
-        col2.Orientation = forms.Orientation.Vertical
-        col2.Spacing = 8
-        col2.Width = 180
-        col2.Items.Add(self.lbl_thickness)
-        col2.Items.Add(self.dd_thickness)
-        col2.Items.Add(self.txt_thickness)
-        col2.Items.Add(self.lbl_width)
-        col2.Items.Add(self.txt_width)
-        col2.Items.Add(self.lbl_length)
-        col2.Items.Add(self.txt_length)
-        col2.Items.Add(self.lbl_alt_val)
-        col2.Items.Add(self.txt_alt_val)
-        col2.Items.Add(self.dd_alt_unit)
-        col2.Items.Add(self.lbl_qty)
-        col2.Items.Add(self.txt_qty)
+        col_alloy = forms.StackLayout()
+        col_alloy.Orientation = forms.Orientation.Vertical
+        col_alloy.Spacing = 8
+        col_alloy.Width = 200
+        col_alloy.Items.Add(self.lbl_alloy)
+        col_alloy.Items.Add(self.dd_alloy)
+        col_alloy.Items.Add(self.lbl_alloy_desc)
 
-        col3 = forms.StackLayout()
-        col3.Orientation = forms.Orientation.Vertical
-        col3.Spacing = 8
+        col_dims = forms.StackLayout()
+        col_dims.Orientation = forms.Orientation.Vertical
+        col_dims.Spacing = 8
+        col_dims.Width = 200
+        col_dims.Items.Add(self.lbl_mode)
+        col_dims.Items.Add(self.dd_mode)
+        col_dims.Items.Add(self.lbl_thickness)
+        col_dims.Items.Add(self.dd_thickness)
+        col_dims.Items.Add(self.txt_thickness)
+        col_dims.Items.Add(self.lbl_width)
+        col_dims.Items.Add(self.txt_width)
+        col_dims.Items.Add(self.lbl_length)
+        col_dims.Items.Add(self.txt_length)
+        col_dims.Items.Add(self.lbl_alt_val)
+        col_dims.Items.Add(self.txt_alt_val)
+        col_dims.Items.Add(self.dd_alt_unit)
+        col_dims.Items.Add(self.lbl_qty)
+        col_dims.Items.Add(self.txt_qty)
+
+        col_output = forms.StackLayout()
+        col_output.Orientation = forms.Orientation.Vertical
+        col_output.Spacing = 8
 
         lbl_res = forms.Label()
         lbl_res.Text = "Calculation Summary:"
 
-        col3.Items.Add(self.btn_pick)
-        col3.Items.Add(lbl_res)
-        col3.Items.Add(forms.StackLayoutItem(self.txt_output, True))
-        col3.Items.Add(self.btn_copy)
+        col_output.Items.Add(self.btn_pick)
+        col_output.Items.Add(lbl_res)
+        col_output.Items.Add(forms.StackLayoutItem(self.txt_output, True))
+        col_output.Items.Add(self.btn_apply)
+        col_output.Items.Add(self.btn_copy)
 
         main_layout = forms.StackLayout()
         main_layout.Orientation = forms.Orientation.Horizontal
         main_layout.Spacing = 20
-        main_layout.Items.Add(col1)
-        main_layout.Items.Add(col2)
-        main_layout.Items.Add(forms.StackLayoutItem(col3, True))
+        main_layout.Items.Add(col_material)
+        main_layout.Items.Add(col_alloy)
+        main_layout.Items.Add(col_dims)
+        main_layout.Items.Add(forms.StackLayoutItem(col_output, True))
 
         self.Content = main_layout
 
+    def OnMaterialChanged(self, sender, e):
+        material_key = str(self.dd_material.SelectedValue) if self.dd_material.SelectedValue else ""
+        alloys = get_material_alloys(material_key)
+        self.dd_alloy.Items.Clear()
+        for alloy in alloys.keys():
+            self.dd_alloy.Items.Add(str(alloy))
+        if self.dd_alloy.Items.Count > 0:
+            self.dd_alloy.SelectedIndex = 0
+        self.OnAlloyChanged(None, None)
+
     def OnAlloyChanged(self, sender, e):
+        material_key = str(self.dd_material.SelectedValue) if self.dd_material.SelectedValue else ""
+        alloys = get_material_alloys(material_key)
         key = str(self.dd_alloy.SelectedValue) if self.dd_alloy.SelectedValue else ""
-        if key in ALUMINUM_DATA:
-            info = ALUMINUM_DATA[key]
+        if key in alloys:
+            info = alloys[key]
             self.lbl_alloy_desc.Text = "{0}\n{1}".format(info["spec"], info["desc"])
         self.Calculate()
 
@@ -286,11 +360,14 @@ class AluminumWeightCalculatorForm(forms.Form):
         self.Calculate()
 
     def Calculate(self):
+        self.current_result = None
         try:
+            material_key = str(self.dd_material.SelectedValue) if self.dd_material.SelectedValue else ""
+            alloys = get_material_alloys(material_key)
             key = str(self.dd_alloy.SelectedValue) if self.dd_alloy.SelectedValue else ""
-            if key not in ALUMINUM_DATA:
+            if key not in alloys:
                 return
-            alloy_info = ALUMINUM_DATA[key]
+            alloy_info = alloys[key]
             rho = alloy_info["density"]
             spec = alloy_info["spec"]
 
@@ -298,8 +375,15 @@ class AluminumWeightCalculatorForm(forms.Form):
             qty_val = parse_fabrication_input(self.txt_qty.Text)
             qty = max(1, int(qty_val)) if qty_val > 0 else 1
 
+            # Thickness only genuinely applies to modes that use it in the
+            # math below (T x W x L, Linear, Area) - Volume mode computes
+            # weight straight from volume and never touches thickness.
+            thickness_applies = False
+            thickness_val = 0.0
+
             lines = []
             lines.append("=== ALUMINUM WEIGHT ESTIMATOR ===")
+            lines.append("Material: {0}".format(material_key))
             lines.append("Alloy: {0}".format(key))
             lines.append("Spec:  {0}".format(spec))
             lines.append("Density: {0:.4f} lbs/cu.in".format(rho))
@@ -315,6 +399,8 @@ class AluminumWeightCalculatorForm(forms.Form):
                 unit_lbs_sqft = t * 144.0 * rho
                 piece_weight = piece_cuin * rho
                 total_weight = piece_weight * qty
+                thickness_applies = True
+                thickness_val = t
 
                 lines.append("Dim: {0:.3f} in T x {1:.2f} in W x {2:.2f} in L".format(t, w, l))
                 lines.append("Unit Rate: {0:.3f} lbs/sq.ft".format(unit_lbs_sqft))
@@ -334,6 +420,8 @@ class AluminumWeightCalculatorForm(forms.Form):
                 total_cuin = section_sqin * l_in
                 piece_weight = total_cuin * rho
                 total_weight = piece_weight * qty
+                thickness_applies = True
+                thickness_val = t
 
                 lines.append("Length: {0:.2f} {1}".format(l_raw, unit))
                 lines.append("Piece Wgt: {0:.2f} lbs".format(piece_weight))
@@ -350,6 +438,8 @@ class AluminumWeightCalculatorForm(forms.Form):
                 total_cuin = a_sqin * t
                 piece_weight = total_cuin * rho
                 total_weight = piece_weight * qty
+                thickness_applies = True
+                thickness_val = t
 
                 lines.append("Area: {0:.2f} {1}".format(a_raw, unit))
                 lines.append("Piece Wgt: {0:.2f} lbs".format(piece_weight))
@@ -372,6 +462,15 @@ class AluminumWeightCalculatorForm(forms.Form):
                 lines.append("TOTAL WGT: {0:.2f} lbs".format(total_weight))
 
             self.txt_output.Text = "\n".join(lines)
+
+            self.current_result = {
+                "material": material_key,
+                "alloy": key,
+                "spec": spec,
+                "piece_weight": piece_weight,
+                "thickness_applies": thickness_applies,
+                "thickness": thickness_val,
+            }
         except Exception as ex:
             self.txt_output.Text = "Calculation error: {0}".format(str(ex))
 
@@ -444,6 +543,40 @@ class AluminumWeightCalculatorForm(forms.Form):
         finally:
             self.Visible = True
             self.Calculate()
+
+    def OnApplyToSelected(self, sender, e):
+        if not self.current_result:
+            Rhino.RhinoApp.WriteLine("Aluminum Estimator: no valid calculation to apply - check alloy selection.")
+            return
+
+        self.Visible = False
+        try:
+            objs = rs.GetObjects("Select objects to apply calculator parameters to", preselect=True)
+            if not objs:
+                return
+
+            result = self.current_result
+            doc = Rhino.RhinoDoc.ActiveDoc
+            undo_record = doc.BeginUndoRecord("Apply Aluminum Calculator Parameters")
+            try:
+                count = 0
+                for obj_id in objs:
+                    rs.SetUserText(obj_id, "Material", result["material"])
+                    rs.SetUserText(obj_id, "Alloy", result["alloy"])
+                    rs.SetUserText(obj_id, "Spec", result["spec"])
+                    rs.SetUserText(obj_id, "Weight (lbs)", "{0:.2f}".format(result["piece_weight"]))
+                    if result["thickness_applies"]:
+                        rs.SetUserText(obj_id, "Thickness (in)", "{0:.3f}".format(result["thickness"]))
+                    count += 1
+            finally:
+                doc.EndUndoRecord(undo_record)
+
+            Rhino.RhinoApp.WriteLine("Aluminum Estimator: applied parameters to {0} object(s).".format(count))
+            self.txt_output.Text = self.txt_output.Text + "\n--------------------------------\nApplied to {0} selected object(s).".format(count)
+        except Exception as e:
+            Rhino.RhinoApp.WriteLine("Apply error: {0}".format(str(e)))
+        finally:
+            self.Visible = True
 
     def OnCopyClipboard(self, sender, e):
         try:
