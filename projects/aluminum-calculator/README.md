@@ -53,3 +53,7 @@ Next run hit `AttributeError: ... object has no attribute 'ShowModal'` in `main(
 ## 2026-08-07, real-Rhino run: bug #8 — form not staying on top of Rhino
 
 Once the form finally opened, the owner reported it doesn't stay above the Rhino window - `ShowModal`'s owner argument was the thing keeping it pinned on top, and switching to `Show()` for bug #7 dropped that with nothing replacing it. Fixed by setting `form.Owner = Rhino.UI.RhinoEtoApp.MainWindow` before calling `Show()` - an owned non-modal window stays above its owner without blocking input to it (unlike `ShowModal`), which is exactly what the pick/apply flows need.
+
+## 2026-08-07, real-Rhino run: bug #9 — zero-arg `super()` fails under IronPython 2
+
+Next run hit `__init__() takes at least 1 argument (0 given)` in `AluminumWeightCalculatorForm.__init__`. Message phrasing (Python-2-style "takes at least N (M given)" rather than Python 3's "missing N required positional argument") plus the traceback's temp-file path (`AppData\Local\Temp\TempScript.py`, no `.rhinocode\stage` segment) both point to this run going through Rhino's legacy `RunPythonScript` command (IronPython 2 engine) rather than ScriptEditor's CPython bridge - same "wrong engine" tell as the earlier Pascal Golay scripts this session. Root cause: `super().__init__()` (zero-arg form) only works in Python 3 - IronPython 2 requires the explicit `super(ClassName, self).__init__()` form. Fixed by switching to the explicit form, which works under both engines, so the script no longer depends on which one actually runs it.

@@ -97,7 +97,12 @@ def parse_fabrication_input(input_str):
 
 class AluminumWeightCalculatorForm(forms.Form):
     def __init__(self):
-        super().__init__()
+        # Explicit two-arg form, not the zero-arg super() shortcut - the
+        # zero-arg form is Python-3-only and throws
+        # "__init__() takes at least 1 argument (0 given)" under
+        # IronPython 2 (Rhino's legacy RunPythonScript engine). Explicit
+        # form works under both that and the CPython ScriptEditor bridge.
+        super(AluminumWeightCalculatorForm, self).__init__()
         self.Title = "Aluminum Sheet & Plate Weight Estimator"
         self.ClientSize = drawing.Size(950, 480)
         self.Resizable = True
