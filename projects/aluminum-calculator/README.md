@@ -49,3 +49,7 @@ First actual run in Rhino (via ScriptEditor) crashed immediately in `_init_layou
 ## 2026-08-07, real-Rhino run: bug #7 — `ShowModal` doesn't exist on `Form`
 
 Next run hit `AttributeError: ... object has no attribute 'ShowModal'` in `main()`. `ShowModal` is an `Eto.Forms.Dialog` method, not a `Form` method — `AluminumWeightCalculatorForm` extends `forms.Form`, which only has `Show()`. This is also the functionally correct fix, not just the compiling one: `OnPickGeometry`/`OnApplyToSelected` both hide the form (`self.Visible = False`) to let the owner click objects in the Rhino viewport, then show it again — a true modal dialog blocks interaction with its owner window for its entire lifetime, hidden or not, so modal would have broken both pick/apply flows even if `ShowModal` had existed on `Form`. Fixed `main()` to call `form.Show()`.
+
+## 2026-08-07, real-Rhino run: bug #8 — form not staying on top of Rhino
+
+Once the form finally opened, the owner reported it doesn't stay above the Rhino window - `ShowModal`'s owner argument was the thing keeping it pinned on top, and switching to `Show()` for bug #7 dropped that with nothing replacing it. Fixed by setting `form.Owner = Rhino.UI.RhinoEtoApp.MainWindow` before calling `Show()` - an owned non-modal window stays above its owner without blocking input to it (unlike `ShowModal`), which is exactly what the pick/apply flows need.

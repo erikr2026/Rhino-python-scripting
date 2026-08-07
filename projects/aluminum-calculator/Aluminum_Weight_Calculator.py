@@ -596,7 +596,11 @@ def main():
     # for a Rhino viewport selection, which needs the viewport interactive
     # while the form is open - a true modal dialog would block that even
     # while hidden. forms.Form only has Show(), not ShowModal() (that's
-    # Eto.Forms.Dialog only).
+    # Eto.Forms.Dialog only). Setting Owner (instead of ShowModal's owner
+    # arg) keeps the form pinned on top of the Rhino main window without
+    # making it modal - Show() alone leaves it ownerless and lets Rhino's
+    # window come to front over it.
+    form.Owner = Rhino.UI.RhinoEtoApp.MainWindow
     form.Show()
 
 if __name__ == "__main__":
