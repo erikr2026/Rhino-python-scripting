@@ -170,7 +170,7 @@ def align_grips_to_curve():
         diag = rs.Distance(bbox[0], bbox[6])
 
         plane_srf = rs.AddPlaneSurface(plane, diag, diag)
-        center = rs.EvaluateSurface(plane_srf, (diag / 2.0, diag / 2.0))
+        center = rs.EvaluateSurface(plane_srf, diag / 2.0, diag / 2.0)
 
         rs.EnableRedraw(False)
         for obj_id, index, _pt in grips:
