@@ -592,7 +592,12 @@ class AluminumWeightCalculatorForm(forms.Form):
 
 def main():
     form = AluminumWeightCalculatorForm()
-    form.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow)
+    # Non-modal: OnPickGeometry/OnApplyToSelected hide the form and prompt
+    # for a Rhino viewport selection, which needs the viewport interactive
+    # while the form is open - a true modal dialog would block that even
+    # while hidden. forms.Form only has Show(), not ShowModal() (that's
+    # Eto.Forms.Dialog only).
+    form.Show()
 
 if __name__ == "__main__":
     main()
