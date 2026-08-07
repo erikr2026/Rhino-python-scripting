@@ -127,7 +127,7 @@ def plane_from_selection():
         u_mid = u_dom[0] + 0.5 * (u_dom[1] - u_dom[0])
         v_mid = v_dom[0] + 0.5 * (v_dom[1] - v_dom[0])
         uv_mid = (u_mid, v_mid)
-        pt = rs.EvaluateSurface(obj_id, uv_mid)
+        pt = rs.EvaluateSurface(obj_id, u_mid, v_mid)
         return rs.PlaneFromNormal(pt, rs.SurfaceNormal(obj_id, uv_mid))
     else:
         plane = rs.CurvePlane(obj_id)
