@@ -1,6 +1,10 @@
 """
 AlignGrips.py - Python 3 (CPython) port of AlignGrips.rvb (Pascal Golay, McNeel)
 
+v2 (2026-08-07): owner ran this against real Rhino 8 and confirmed it works,
+after a v1 bug fix (EvaluateSurface's u/v args were packed into a tuple
+instead of passed separately -- see git history for the one-line diff).
+
 TARGET ENGINE: Rhino 8 Script Editor, CPython3 mode (run via the ScriptEditor
 command, press F5). Do NOT run this via the legacy `RunPythonScript` command
 (that invokes IronPython 2, which has different string/encoding behavior).
