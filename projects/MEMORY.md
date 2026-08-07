@@ -19,15 +19,7 @@ just this repo's own folders.
 | `BRIX MODELING` | Modeling scripts (object namer, offset-surface-with-name, polysurface dupe edge, the intersection slot cutter). Versioned filenames, own `CHANGELOG.md`. | Active, in production use. |
 | `_template` | Empty starter folder (`README.md` only) — copy this for any new project folder. | Template, not a real project. |
 | `brix-plugin-packaging` | Plan (not started) to turn the 4 `BRIX *` folders into headlessly-buildable Rhino plugins via Script Editor Projects (`.rhproj`/`rhinocode`). | Parked at owner's request — "hold on to it for now." |
+| `draft-scripts` | One-off/derivative scripts that don't belong in a permanent project folder yet — each tagged in its own header with its probable eventual home when known. E.g. `MirrorWithText_v1.py`, a hardcoded-options trim of `pascal-golay-scripts/mirror_ex/Mirror_ex.py`, tagged as probably belonging in `BRIX CNC PARTS` (not confirmed). | Active — new folder, 2026-08-07. |
 | `offset-parallel-lines` | Moves two selected parallel lines apart by a settable distance (typed or two-click). | WIP — owner testing/tweaking locally; this copy may lag. |
-| `pascal-golay-scripts` | 1:1 Python 3 ports of Pascal Golay's (McNeel) public RhinoScript utilities — ~49 scripts, one folder each, paired with the original `.rvb`. Only genuine 1:1 ports live here; owner-requested variants/derivatives (e.g. a trimmed-down version of one of these) belong in their own home, not mixed into this folder. Per-script confidence/caveat table in this folder's own `README.md`; 4-tier test plan in `TESTING.md`. | Mostly untested against real Rhino — `aligngrips/AlignGrips.py` and `mirror_ex/Mirror_ex.py` are the two confirmed-working so far (2026-08-07, after fixing a shared `EvaluateSurface` bug in both). |
+| `pascal-golay-scripts` | 1:1 Python 3 ports of Pascal Golay's (McNeel) public RhinoScript utilities — ~49 scripts, one folder each, paired with the original `.rvb`. Only genuine 1:1 ports live here; owner-requested variants/derivatives (e.g. a trimmed-down version of one of these) go in `draft-scripts` instead, not mixed into this folder. Per-script confidence/caveat table in this folder's own `README.md`; 4-tier test plan in `TESTING.md`. | Mostly untested against real Rhino — `aligngrips/AlignGrips.py` and `mirror_ex/Mirror_ex.py` are the two confirmed-working so far (2026-08-07, after fixing a shared `EvaluateSurface` bug in both). |
 | `shell-bisector-t-surface` | Builds a bisector surface + T-fin between two picked faces at a hull junction, multi-junction in one run. | Confirmed working end-to-end on the real hull. |
-
-## Related, not (yet) in this repo
-
-- **`draft-scripts`** (separate repo, `erikr2026/draft-scripts`) — home for
-  one-off/derivative scripts that don't belong in a permanent project
-  folder yet, tagged with their probable eventual home when known. E.g.
-  `MirrorWithText_v1.py`, a hardcoded-options trim of
-  `pascal-golay-scripts/mirror_ex/Mirror_ex.py`, tagged as probably
-  belonging in `BRIX CNC PARTS` once confirmed.

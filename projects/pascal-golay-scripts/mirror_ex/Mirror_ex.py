@@ -1,5 +1,10 @@
 """
 Mirror_ex.py
+
+TESTED AND WORKING (2026-08-07): owner ran this in real Rhino 8 via
+ScriptEditor and confirmed it runs clean, after fixing an EvaluateSurface
+tuple-vs-separate-args bug in plane_from_selection() (see git history).
+
 Ported from Mirror_ex.rvb (Pascal Golay, McNeel - script version 2009-09-28).
 
 Target engine: Rhino 8 Script Editor, CPython3 mode (run via the ScriptEditor
